@@ -12,7 +12,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::error::AudioError;
-use crate::resample::LinearResampler;
+use crate::resample::Resampler;
 
 /// One decoded track, converted to interleaved stereo f32 at the output rate.
 pub(crate) struct TrackDecoder {
@@ -21,11 +21,12 @@ pub(crate) struct TrackDecoder {
     track_id: u32,
     time_base: Option<TimeBase>,
     output_rate: u32,
-    resampler: LinearResampler,
+    resampler: Resampler,
     decoded: Vec<f32>,
     resampled: Vec<f32>,
     skip_frames: u64,
     eof: bool,
+    resampler_flushed: bool,
     duration: Option<Duration>,
 }
 
@@ -91,11 +92,12 @@ impl TrackDecoder {
             track_id,
             time_base,
             output_rate,
-            resampler: LinearResampler::new(source_rate, output_rate),
+            resampler: Resampler::new(source_rate, output_rate),
             decoded: Vec::new(),
             resampled: Vec::new(),
             skip_frames: 0,
             eof: false,
+            resampler_flushed: false,
             duration,
         })
     }
@@ -112,7 +114,11 @@ impl TrackDecoder {
         target_frames: usize,
     ) -> Result<usize, AudioError> {
         if self.eof {
-            return Ok(0);
+            if !self.resampler_flushed {
+                self.resampler.flush(out);
+                self.resampler_flushed = true;
+            }
+            return Ok(out.len() / 2);
         }
         while out.len() / 2 < target_frames {
             let packet = match self.reader.next_packet() {
@@ -171,6 +177,10 @@ impl TrackDecoder {
 
             out.extend_from_slice(&self.resampled);
         }
+        if self.eof && !self.resampler_flushed {
+            self.resampler.flush(out);
+            self.resampler_flushed = true;
+        }
         Ok(out.len() / 2)
     }
 
@@ -190,6 +200,7 @@ impl TrackDecoder {
             .map_err(|error| AudioError::Decode(format!("seek failed: {error}")))?;
         self.decoder.reset();
         self.resampler.reset();
+        self.resampler_flushed = false;
         self.decoded.clear();
         self.resampled.clear();
         self.eof = false;

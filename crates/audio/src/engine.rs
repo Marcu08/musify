@@ -284,7 +284,16 @@ impl EngineThread {
             Command::Seek(position) => self.seek(position),
             Command::SetVolume(volume) => self.set_volume(volume),
             Command::SetShuffle(shuffle) => {
+                let audible = self.current_index;
+                let was_active = self.state != PlaybackState::Stopped && audible.is_some();
+                let position = self.position();
                 self.queue.set_shuffle(shuffle);
+                if let Some(audible) = audible {
+                    self.queue.select(audible);
+                    if was_active {
+                        self.restart_current_at(position);
+                    }
+                }
                 self.emit(Event::ShuffleChanged(shuffle));
                 self.emit_queue();
             }
@@ -673,18 +682,61 @@ impl EngineThread {
         }
     }
 
+    fn restart_current_at(&mut self, position: Duration) {
+        let was_playing = self.state == PlaybackState::Playing;
+        self.flush_stream(false);
+        self.decoder = None;
+        self.boundaries.clear();
+        self.end_frame = None;
+        self.current = None;
+        self.current_index = None;
+        if self.queue.current_index().is_none() {
+            self.set_state(PlaybackState::Stopped);
+            self.emit(Event::TrackChanged(None));
+            return;
+        }
+        if !self.open_current(0) {
+            self.set_state(PlaybackState::Stopped);
+            self.emit(Event::TrackChanged(None));
+            return;
+        }
+        if was_playing {
+            self.set_state(PlaybackState::Playing);
+        } else {
+            self.set_state(PlaybackState::Paused);
+        }
+        if position.is_zero() {
+            self.prefill();
+        } else {
+            self.seek(position);
+        }
+        self.publish();
+    }
+
     fn move_item(&mut self, from: usize, to: usize) {
+        let audible = self.current_index;
+        let was_active = self.state != PlaybackState::Stopped && audible.is_some();
+        let position = self.position();
         self.queue.move_item(from, to);
         for boundary in &mut self.boundaries {
             boundary.queue_index = remap_index(boundary.queue_index, from, to);
         }
-        if let Some(index) = self.current_index {
-            self.current_index = Some(remap_index(index, from, to));
+        if let Some(index) = audible {
+            let moved = remap_index(index, from, to);
+            self.current_index = Some(moved);
+            self.queue.select(moved);
+            if was_active {
+                self.restart_current_at(position);
+            }
         }
         self.emit_queue();
     }
 
     fn remove_item(&mut self, index: usize) {
+        let audible = self.current_index;
+        let audible_removed = audible == Some(index);
+        let was_active = self.state != PlaybackState::Stopped && audible.is_some();
+        let position = self.position();
         self.boundaries
             .retain(|boundary| boundary.queue_index != index);
         for boundary in &mut self.boundaries {
@@ -692,24 +744,41 @@ impl EngineThread {
                 boundary.queue_index -= 1;
             }
         }
-        self.current_index = self.current_index.map(|current| {
-            if current == index {
-                current
-            } else if current > index {
-                current - 1
-            } else {
-                current
-            }
-        });
-        let outcome = self.queue.remove(index);
-        if outcome.current_removed {
-            self.current_index = self.queue.current_index();
-        }
-        if outcome.current_removed && self.queue.is_empty() {
+        self.queue.remove(index);
+        if self.queue.is_empty() {
             self.stop_playback();
-        } else {
-            self.emit_queue();
+            return;
         }
+        let selected = if audible_removed {
+            // The cursor may already point at a prefetched track further ahead.
+            // The first boundary is the one that would have played next.
+            self.boundaries
+                .front()
+                .map(|boundary| boundary.queue_index)
+                .or_else(|| self.queue.current_index())
+        } else {
+            audible.map(|current| {
+                if current > index {
+                    current - 1
+                } else {
+                    current
+                }
+            })
+        };
+        if let Some(selected) = selected {
+            self.current_index = Some(selected);
+            self.queue.select(selected);
+        }
+        if was_active {
+            self.restart_current_at(if audible_removed {
+                Duration::ZERO
+            } else {
+                position
+            });
+        } else if audible_removed {
+            self.current_index = None;
+        }
+        self.emit_queue();
     }
 
     fn set_volume(&mut self, volume: u16) {
@@ -819,5 +888,248 @@ fn remap_index(index: usize, from: usize, to: usize) -> usize {
         index + 1
     } else {
         index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::fs;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::thread::{self, JoinHandle};
+
+    use crossbeam_channel::unbounded;
+    use musify_core::TrackId;
+    use rtrb::{Consumer, RingBuffer};
+
+    use super::*;
+    use crate::clock::AudioClock;
+
+    const SAMPLE_RATE: u32 = 48_000;
+    const RING_FRAMES: usize = 4_096;
+
+    fn write_constant_wav(path: &Path, sample: f32) {
+        let channels = 2u16;
+        let frames = SAMPLE_RATE;
+        let value = (sample * f32::from(i16::MAX)) as i16;
+        let data_len = frames * u32::from(channels) * 2;
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+        bytes.extend_from_slice(&(SAMPLE_RATE * u32::from(channels) * 2).to_le_bytes());
+        bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for _ in 0..frames * u32::from(channels) {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("write test wav");
+    }
+
+    fn track(id: i64, path: &Path) -> Track {
+        Track {
+            id: TrackId::new(id),
+            path: path.to_path_buf(),
+            title: format!("Track {id}"),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            album_artist: None,
+            track_number: None,
+            disc_number: None,
+            duration: Duration::from_secs(1),
+            year: None,
+            genre: None,
+            cover_path: None,
+            added_at: 0,
+        }
+    }
+
+    /// Stands in for the real-time callback: drains the ring when the engine
+    /// asks for a flush (epoch change), and drains a requested number of frames
+    /// so a test can make room for prefetched audio.
+    struct FakeCallback {
+        drain_requests: mpsc::Sender<usize>,
+        drain_done: mpsc::Receiver<()>,
+        stop: Arc<AtomicBool>,
+        handle: Option<JoinHandle<Consumer<f32>>>,
+    }
+
+    impl FakeCallback {
+        fn start(mut consumer: Consumer<f32>, clock: Arc<AudioClock>) -> Self {
+            let (drain_requests, request_rx) = mpsc::channel::<usize>();
+            let (done_tx, drain_done) = mpsc::channel::<()>();
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_thread = Arc::clone(&stop);
+            let handle = thread::spawn(move || {
+                while !stop_thread.load(Ordering::Relaxed) {
+                    while let Ok(frames) = request_rx.try_recv() {
+                        for _ in 0..frames * 2 {
+                            if consumer.pop().is_err() {
+                                break;
+                            }
+                        }
+                        let _ = done_tx.send(());
+                    }
+                    let epoch = clock.epoch.load(Ordering::Acquire);
+                    if clock.applied_epoch.load(Ordering::Acquire) != epoch {
+                        while consumer.pop().is_ok() {}
+                        clock.applied_epoch.store(epoch, Ordering::Release);
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                consumer
+            });
+            Self {
+                drain_requests,
+                drain_done,
+                stop,
+                handle: Some(handle),
+            }
+        }
+
+        fn drain(&self, frames: usize) {
+            self.drain_requests.send(frames).expect("callback alive");
+            self.drain_done.recv().expect("drain acknowledged");
+        }
+
+        fn stop(mut self) -> Consumer<f32> {
+            self.stop.store(true, Ordering::Relaxed);
+            self.handle
+                .take()
+                .expect("callback thread")
+                .join()
+                .expect("join")
+        }
+    }
+
+    struct Harness {
+        engine: EngineThread,
+        callback: FakeCallback,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let (producer, consumer) = RingBuffer::new(RING_FRAMES * 2);
+            let clock = Arc::new(AudioClock::new(100));
+            let callback = FakeCallback::start(consumer, Arc::clone(&clock));
+            let (events, _) = unbounded();
+            let shared = Arc::new(Mutex::new(PlaybackSnapshot::default()));
+            let engine = EngineThread::new(
+                producer,
+                OutputInfo {
+                    sample_rate: SAMPLE_RATE,
+                    channels: 2,
+                },
+                clock,
+                events,
+                shared,
+                100,
+            );
+            Self { engine, callback }
+        }
+
+        /// Start with `tracks`, then prefetch the next track into the ring.
+        fn prefetch_next(&mut self, tracks: Vec<Track>) {
+            self.engine
+                .start_tracks_internal(tracks, 0, true, Duration::ZERO);
+            self.callback.drain(RING_FRAMES / 2);
+            self.engine.advance_auto();
+            self.engine.pump_audio();
+        }
+
+        fn ring_samples(self) -> Vec<f32> {
+            let mut consumer = self.callback.stop();
+            let mut samples = Vec::new();
+            while let Ok(sample) = consumer.pop() {
+                samples.push(sample);
+            }
+            samples
+        }
+    }
+
+    fn assert_only(samples: &[f32], expected: f32) {
+        assert!(!samples.is_empty(), "the ring should contain audio");
+        assert!(
+            samples
+                .iter()
+                .all(|sample| (sample - expected).abs() < 0.01),
+            "the ring still contains audio from another track"
+        );
+    }
+
+    fn titles(engine: &EngineThread) -> Vec<&str> {
+        engine
+            .queue
+            .items()
+            .iter()
+            .map(|item| item.track.title.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn removing_the_prefetched_next_track_flushes_its_audio() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let a = dir.path().join("a.wav");
+        let b = dir.path().join("b.wav");
+        let c = dir.path().join("c.wav");
+        write_constant_wav(&a, 0.25);
+        write_constant_wav(&b, -0.75);
+        write_constant_wav(&c, 0.5);
+        let mut harness = Harness::new();
+        harness.prefetch_next(vec![track(1, &a), track(2, &b), track(3, &c)]);
+
+        harness.engine.remove_item(1);
+
+        assert_eq!(titles(&harness.engine), vec!["Track 1", "Track 3"]);
+        assert!(harness.engine.boundaries.is_empty());
+        assert_only(&harness.ring_samples(), 0.25);
+    }
+
+    #[test]
+    fn moving_the_prefetched_next_track_flushes_its_audio() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let a = dir.path().join("a.wav");
+        let b = dir.path().join("b.wav");
+        let c = dir.path().join("c.wav");
+        write_constant_wav(&a, 0.25);
+        write_constant_wav(&b, -0.75);
+        write_constant_wav(&c, 0.5);
+        let mut harness = Harness::new();
+        harness.prefetch_next(vec![track(1, &a), track(2, &b), track(3, &c)]);
+
+        harness.engine.move_item(1, 2);
+
+        assert_eq!(
+            titles(&harness.engine),
+            vec!["Track 1", "Track 3", "Track 2"]
+        );
+        assert!(harness.engine.boundaries.is_empty());
+        assert_only(&harness.ring_samples(), 0.25);
+    }
+
+    #[test]
+    fn removing_the_audible_track_starts_the_prefetched_next_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let a = dir.path().join("a.wav");
+        let b = dir.path().join("b.wav");
+        write_constant_wav(&a, 0.25);
+        write_constant_wav(&b, -0.75);
+        let mut harness = Harness::new();
+        harness.prefetch_next(vec![track(1, &a), track(2, &b)]);
+
+        harness.engine.remove_item(0);
+
+        assert_eq!(titles(&harness.engine), vec!["Track 2"]);
+        assert!(harness.engine.boundaries.is_empty());
+        assert_only(&harness.ring_samples(), -0.75);
     }
 }

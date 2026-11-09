@@ -76,6 +76,7 @@ struct SavedState {
 
 impl AppBackend {
     pub fn new() -> anyhow::Result<Self> {
+        let started = Instant::now();
         let data_dir = app_data_dir();
         std::fs::create_dir_all(&data_dir)?;
         let config_path = data_dir.join("config.toml");
@@ -159,8 +160,26 @@ impl AppBackend {
             backend.send_audio(Command::SetRepeat(repeat));
         }
         backend.restore_state();
+        if std::env::var("MUSIFY_AUTOPLAY").as_deref() == Ok("1")
+            && let Ok(tracks) = backend.library.tracks_sorted(
+                TrackSort::Title,
+                musify_core::SortDirection::Ascending,
+                100,
+                0,
+            )
+            && !tracks.is_empty()
+        {
+            backend.send_audio(Command::PlayTracks {
+                tracks,
+                start_index: 0,
+            });
+        }
         backend.restart_watcher();
         backend.scan.start();
+        tracing::info!(
+            elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "backend pronto"
+        );
         Ok(backend)
     }
 

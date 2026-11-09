@@ -91,6 +91,17 @@ impl PlaybackQueue {
         self.order_pos = 0;
     }
 
+    /// Point the play cursor at a concrete queue index. The engine uses this to
+    /// keep the cursor on the audible track after a queue edit, because prefetch
+    /// may have already advanced it to the next track.
+    pub fn select(&mut self, index: usize) -> bool {
+        let Some(position) = self.order.iter().position(|&candidate| candidate == index) else {
+            return false;
+        };
+        self.order_pos = position;
+        true
+    }
+
     pub fn set_shuffle(&mut self, shuffle: bool) {
         if self.shuffle == shuffle {
             return;

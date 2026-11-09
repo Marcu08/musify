@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,14 +53,19 @@ pub struct ScanState {
 pub struct CoverCache {
     cache: Option<ImageCache>,
     images: HashMap<PathBuf, Image>,
+    order: VecDeque<PathBuf>,
     scale: f32,
 }
+
+const MAX_COVERS: usize = 128;
+const COVER_SIZE_PT: f32 = 192.0;
 
 impl CoverCache {
     fn new() -> Self {
         Self {
             cache: None,
             images: HashMap::new(),
+            order: VecDeque::new(),
             scale: 1.0,
         }
     }
@@ -73,16 +78,30 @@ impl CoverCache {
         if (self.scale - scale).abs() > 0.01 {
             self.scale = scale.max(1.0);
             self.images.clear();
+            self.order.clear();
         }
     }
 
     fn get(&mut self, path: &Path) -> Option<Image> {
         if let Some(image) = self.images.get(path) {
+            if let Some(position) = self.order.iter().position(|cached| cached == path)
+                && let Some(cached) = self.order.remove(position)
+            {
+                self.order.push_back(cached);
+            }
             return Some(image.clone());
         }
         let cache = self.cache.as_ref()?;
-        let image = cache.file(path, 320.0, self.scale);
+        let image = cache.file(path, COVER_SIZE_PT, self.scale);
         self.images.insert(path.to_path_buf(), image.clone());
+        self.order.push_back(path.to_path_buf());
+        while self.images.len() > MAX_COVERS {
+            if let Some(oldest) = self.order.pop_front() {
+                self.images.remove(&oldest);
+            } else {
+                break;
+            }
+        }
         Some(image)
     }
 }

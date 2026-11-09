@@ -154,15 +154,18 @@ questa macchina.
 | Area | Risultato | Target indicativo |
 | --- | --- | --- |
 | Audio engine da solo | **0,93% di un core**, 15,9 MB, 0 underrun | < 2% |
+| Resampler sinc 44,1 → 48 kHz | **1,25% di un core** (lineare: 0,31%), 0 underrun | < 2% |
 | Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
 | UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
-| UI in riproduzione | **7,2% di un core**, **0,60%** su 12 thread | < 2% |
-| Avvio app completa | **~1,0–2,7 s**, mediana ~1,5 s (best M3: 0,66 s) | < 300 ms |
-| RAM | **~176 MB** a riposo, ~182 MB in riproduzione | < 80 MB |
+| UI in riproduzione | **8,27% di un core**, **0,69%** su 12 thread | < 2% |
+| Avvio app completa | **1,09 s** mediana (min 1,08, max 2,11) | < 300 ms |
+| RAM | **185 MB** working set a riposo, 187 MB in riproduzione | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
 l'inizializzazione GPU sono la parte dominante. La UI a riposo non ridisegna.
-Tutti i dettagli e i problemi noti sono nei report delle milestone.
+Tutti i dettagli e i problemi noti sono nei report delle milestone; il metodo e
+i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
+[M45-FINAL](docs/M45-FINAL.md).
 
 ## Milestone
 
@@ -173,7 +176,8 @@ Tutti i dettagli e i problemi noti sono nei report delle milestone.
 | M2 — Libreria | completata | [M2](docs/M2-LIBRARY-REPORT.md) |
 | M3 — UI Rune | completata | [M3](docs/M3-UI-REPORT.md) |
 | M4 — Windows, SMTC, persistenza | completata | [M4](docs/M4-WINDOWS-REPORT.md) |
-| M5 — Spotify (opzionale) | non implementata | — |
+| M4.5 — Prestazioni e qualità locale | completata | [M4.5](docs/M45-REPORT.md) |
+| M5 — Fonti online e radio internet | pianificata | — |
 
 ## Sviluppo
 
@@ -210,17 +214,23 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 ## Limiti noti
 
 - I target di avvio (< 300 ms) e RAM (< 80 MB) non sono centrati su questa
-  macchina; i numeri reali sono sopra.
+  macchina; i numeri reali sono sopra e i target realistici sono nel report
+  M4.5.
 - Su Windows a DPI 125% la prima finestra viene corretta al primo `on_ready`
-  per allineare viewport e finestra nativa.
-- Il resampling è lineare; la qualità è buona per l'uso quotidiano, ma non è
-  un resampler sinc.
-- Modificare la coda mentre un brano è già stato decodificato in anticipo è
-  best-effort: l'audio già nel ring buffer non viene rimosso.
+  per allineare viewport e finestra nativa. L'ultimo `dev` di Rune è stato
+  controllato: non contiene una correzione pertinente, quindi il rev resta
+  pinnato e il workaround resta attivo.
+- Il resampling è sinc (rubato) con fallback lineare tramite
+  `MUSIFY_LINEAR_RESAMPLER=1`. Il costo CPU misurato è più alto del lineare ma
+  resta sotto il 2% di un core per l'audio engine.
+- Modificare o spostare la coda mentre il brano successivo è già decodificato
+  ora svuota ring buffer e decodifica prima di riaprire il brano corrente; è
+  coperto da test con un finto callback audio.
 - Il dialogo nativo delle cartelle non è stato automatizzato nei test desktop;
-  la configurazione via TOML e variabili d'ambiente è verificata.
-- M5 Spotify non è implementata. Il crate è uno scheletro compilabile dietro
-  feature `spotify`.
+  la configurazione via TOML e variabili d'ambiente è verificata. La checklist
+  manuale è in [docs/MANUAL-CHECKLIST.md](docs/MANUAL-CHECKLIST.md).
+- M5 è pianificata: fonti online generalizzate e radio internet. Il crate
+  `musify-spotify` resta uno scheletro compilabile dietro feature `spotify`.
 
 ## Note legali
 

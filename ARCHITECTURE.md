@@ -45,10 +45,16 @@ solo con comandi ed eventi.
 
 ```text
 file → symphonia (decode, thread engine)
-     → f32 stereo + resampling lineare alla frequenza del device
+     → f32 stereo + resampling sinc (rubato) alla frequenza del device
      → ring buffer rtrb (2 s)
      → callback cpal: gain, pop, scrittura del buffer del device
 ```
+
+Il resampler usa rubato `Async` con sinc finestrato Blackman2, 64 tap e 128×
+oversampling; il ritardo iniziale viene tagliato e il chunk residuo viene
+flushato a fine brano. A parità di frequenza il percorso è una copia esatta. Se
+`MUSIFY_LINEAR_RESAMPLER=1`, se rubato non si inizializza o se un chunk fallisce,
+si usa il vecchio interpolatore lineare invece di interrompere la riproduzione.
 
 Invarianti:
 
@@ -65,7 +71,11 @@ Invarianti:
   gapless a livello di sample, senza crossfade. Un `Next` manuale svuota il
   buffer e può avere un piccolo gap.
 - Volume: `AtomicU16` letto dal callback, con smoothing del gain; nessun lock.
-- Resampling: lineare, scelta M1 documentata; sostituibile in `resample.rs`.
+- Modifica della coda mentre il brano successivo è già decodificato: remove,
+  move e shuffle salvano la posizione corrente, svuotano ring buffer e
+  decodifica, riportano il cursore della coda sul brano udibile (il prefetch
+  può averlo spostato avanti) e riaprono il brano. Così non si sente audio del
+  brano rimosso o spostato. È coperto da test con un callback finto.
 
 ## UI Rune (M3)
 
@@ -108,6 +118,22 @@ UI (Rune, thread principale)
 - **DPI**: Rune crea la prima finestra con lo scale iniziale; `on_ready` la
   ridimensiona/riposiziona. È un workaround circoscritto alla UI.
 
+## Prestazioni e qualità locale (M4.5)
+
+- Il profilo release usa `codegen-units=1`, `lto="fat"` e `strip=true`.
+- `scripts/bench-m45.ps1` misura 10 avvii a riposo e 10 in riproduzione:
+  tempo fino al segnale `RUNE_READY_DIR`, working set, private bytes e CPU su
+  una finestra di 5 s. I risultati sono in `docs/M45-BASELINE.md` e
+  `docs/M45-FINAL.md`.
+- Il caricamento libreria resta sincrono all'avvio: la variante lazy è stata
+  misurata e ha peggiorato i private bytes di circa 22 MB, quindi è stata
+  rimossa. La cache copertine tiene al massimo 128 immagini a 192 pt per
+  limitare il caso di librerie grandi.
+- Il resampler sinc è descritto nella pipeline audio; il fallback lineare è
+  disponibile per diagnosi e macchine lente.
+- La coda invalida l'audio già decodificato a ogni modifica rilevante; i test
+  usano un callback finto che riconosce gli epoch di flush.
+
 ## Libreria locale (M2)
 
 ```text
@@ -148,8 +174,13 @@ cartelle musicali
 - **Gapless**: i sample del brano successivo entrano nello stesso ring buffer; il cambio
   metadati avviene al confine di frame. Nessun crossfade. Un salto manuale può avere un
   piccolo gap perché svuota il buffer.
-- **Resampling**: lineare in M1; se la qualità non basta, si sostituisce il solo
-  `resample.rs` con `rubato`, senza cambiare il contratto del decoder.
+- **Resampling**: sinc con `rubato` in M4.5, confinato a `resample.rs`; il
+  contratto del decoder non cambia e il lineare resta come fallback esplicito.
+- **Modifiche di coda**: il cursore della coda non è la verità su ciò che si
+  sente, perché il prefetch lo sposta avanti. L'engine usa il proprio indice
+  udibile, riallinea il cursore e riapre il brano dopo il flush.
+- **M4.5**: nessun target di RAM/avvio forzato; si tengono solo le modifiche con
+  un guadagno misurato e si riportano anche quelle fallite (lazy load).
 
 ## Diagrammi di dettaglio
 
