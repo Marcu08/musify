@@ -161,9 +161,9 @@ questa macchina.
 | Resampler sinc 44,1 → 48 kHz | **1,25% di un core** (lineare: 0,31%), 0 underrun | < 2% |
 | Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
 | UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
-| UI in riproduzione locale | **7,17% di un core**, **0,60%** su 12 thread | < 2% |
-| Radio MP3 128 kbps | **8,58% di un core**, **0,71%** su 12 thread, +7,9 MB | < 2% |
-| Avvio app completa | **1,11 s** mediana (min 1,07, max 1,59) | < 300 ms |
+| UI in riproduzione locale | **7,80% di un core**, **0,65%** su 12 thread | < 2% |
+| Radio MP3 128 kbps | **6,87% di un core**, **0,57%** su 12 thread, +7,3 MB | < 2% |
+| Avvio app completa | **1,09 s** mediana (min 1,07, max 1,62) | < 300 ms |
 | RAM | **185 MB** working set a riposo, 187 MB locale, 195 MB radio | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
