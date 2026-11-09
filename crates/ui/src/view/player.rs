@@ -37,7 +37,11 @@ pub fn view(s: &UiState) -> El {
         },
     );
     let status_label = if radio {
-        i18n::stream_status_label(&s.stream_status)
+        match s.playback {
+            musify_core::PlaybackState::Playing => i18n::stream_status_label(&s.stream_status),
+            musify_core::PlaybackState::Paused => i18n::PAUSED.to_string(),
+            musify_core::PlaybackState::Stopped => i18n::STOPPED.to_string(),
+        }
     } else {
         i18n::state_label(s.playback).to_string()
     };
