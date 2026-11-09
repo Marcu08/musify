@@ -297,7 +297,17 @@ async fn read_once(
 
     let mut parser = IcyParser::new(metaint);
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = match tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => return Err("the server closed the stream".into()),
+            Err(_) => {
+                if stop.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
         if stop.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -318,7 +328,6 @@ async fn read_once(
             push_audio(shared, stop, &audio)?;
         }
     }
-    Err("the server closed the stream".into())
 }
 
 fn push_audio(shared: &Arc<Shared>, stop: &Arc<AtomicBool>, bytes: &[u8]) -> Result<(), String> {
