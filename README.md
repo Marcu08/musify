@@ -8,12 +8,14 @@ milestone opzionale dietro feature flag.
 
 | Milestone | Stato |
 | --- | --- |
-| M0 — Workspace, CI locale, smoke test Rune | in corso |
-| M1 — Motore audio | da fare |
+| M0 — Workspace, CI locale, smoke test Rune | completata |
+| M1 — Motore audio | completata |
 | M2 — Libreria | da fare |
 | M3 — UI Rune | da fare |
 | M4 — Integrazione Windows e rifinitura | da fare |
 | M5 — Spotify (opzionale) | da fare |
+
+Report: `docs/M0-RUNE-REPORT.md`, `docs/M1-AUDIO-REPORT.md`.
 
 ## Requisiti (Windows)
 
@@ -36,6 +38,19 @@ Controlli locali equivalenti alla CI:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 ```
+
+## Motore audio da riga di comando
+
+```powershell
+cargo run -p musify-audio --bin audio-cli -- `
+  crates/audio/tests/assets/tone.mp3 `
+  crates/audio/tests/assets/tone.flac `
+  crates/audio/tests/assets/tone.ogg
+```
+
+Comandi da stdin: `pause`, `resume`, `toggle`, `next`, `prev`, `seek 12.5`,
+`vol 70`, `status`, `quit`. Gli asset di test si rigenerano con
+`scripts/make-test-assets.ps1` (richiede ffmpeg).
 
 ## Struttura
 

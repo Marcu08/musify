@@ -1,0 +1,6 @@
+[
+  { "t": 0.2, "type": "type", "text": "città 日本語" },
+  { "t": 0.5, "type": "tap", "key": "play" },
+  { "t": 0.8, "type": "tap", "key": "bottom" },
+  { "t": 1.2, "type": "mark", "name": "end" }
+]

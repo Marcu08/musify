@@ -1,17 +1,22 @@
-//! Playback engine (M1).
+//! Musify audio engine.
 //!
-//! The public surface is added milestone by milestone. The module is intentionally
-//! independent from Rune and from any windowing code.
+//! Decoding happens on a dedicated worker thread. Decoded audio is converted to
+//! interleaved stereo f32 at the output device rate and handed to a wait-free
+//! ring buffer; the real-time callback only pops samples and applies gain.
+//!
+//! The engine has no dependency on the UI, Rune or the library database.
 
-/// Crate marker used by the M0 wiring check.
-pub const CRATE_NAME: &str = "musify-audio";
+mod clock;
+mod decoder;
+mod engine;
+mod error;
+mod output;
+mod queue;
+mod resample;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use engine::{AudioEngine, PlaybackSnapshot};
+pub use error::AudioError;
+pub use output::OutputInfo;
 
-    #[test]
-    fn crate_is_wired() {
-        assert_eq!(CRATE_NAME, "musify-audio");
-    }
-}
+/// Playback position updates while a track is playing.
+pub const POSITION_EVENT_INTERVAL_MS: u64 = 200;

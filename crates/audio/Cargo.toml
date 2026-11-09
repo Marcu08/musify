@@ -7,8 +7,19 @@ license.workspace = true
 
 [dependencies]
 musify-core.workspace = true
+cpal.workspace = true
+crossbeam-channel.workspace = true
+rtrb.workspace = true
+symphonia.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "audio-cli"
+path = "src/bin/audio_cli.rs"
 
 [lints]
 workspace = true

@@ -36,10 +36,36 @@ solo con comandi ed eventi.
 | --- | --- |
 | UI | Rune/winit; costruisce solo le righe visibili |
 | app controller | instrada comandi, possiede coda e stato di riproduzione |
-| audio decode | decodifica symphonia e riempie il ring buffer |
+| audio engine | comandi, coda, decodifica e prefill del ring buffer |
 | audio callback | consuma il ring buffer; nessuna allocazione, nessun lock bloccante |
 | library scanner | walkdir + metadati + scritture SQLite |
 | watcher | notify, con debounce, richiede una scansione incrementale |
+
+## Pipeline audio (M1)
+
+```text
+file → symphonia (decode, thread engine)
+     → f32 stereo + resampling lineare alla frequenza del device
+     → ring buffer rtrb (2 s)
+     → callback cpal: gain, pop, scrittura del buffer del device
+```
+
+Invarianti:
+
+- Il callback non alloca, non fa I/O, non prende lock e non usa `unwrap`.
+- La posizione mostrata deriva dai frame **consumati** dal callback; il buffer
+  non viene conteggiato come già riprodotto.
+- Pausa: il callback scrive silenzio e non consuma, quindi il buffer resta pieno
+  e la ripresa è immediata.
+- Seek: un epoch atomico fa svuotare il ring buffer al callback; l'engine attende
+  l'ack e riparte dalla nuova posizione. Questo evita che campioni vecchi
+  seguano il seek.
+- Brano successivo: viene aperto in anticipo; i suoi campioni entrano nello
+  stesso stream e il confine di frame decide quando cambiare i metadati. È
+  gapless a livello di sample, senza crossfade. Un `Next` manuale svuota il
+  buffer e può avere un piccolo gap.
+- Volume: `AtomicU16` letto dal callback, con smoothing del gain; nessun lock.
+- Resampling: lineare, scelta M1 documentata; sostituibile in `resample.rs`.
 
 ## Persistenza
 
@@ -55,8 +81,11 @@ solo con comandi ed eventi.
 - **Errori**: `thiserror` nei crate di dominio, `anyhow` solo nel binario.
 - **Audio**: niente `unwrap` nel percorso di riproduzione; il callback non alloca e non
   acquisisce lock bloccanti.
-- **Gapless**: da decidere in M1; se non affidabile, si documenta il comportamento reale
-  invece di dichiararlo.
+- **Gapless**: i sample del brano successivo entrano nello stesso ring buffer; il cambio
+  metadati avviene al confine di frame. Nessun crossfade. Un salto manuale può avere un
+  piccolo gap perché svuota il buffer.
+- **Resampling**: lineare in M1; se la qualità non basta, si sostituisce il solo
+  `resample.rs` con `rubato`, senza cambiare il contratto del decoder.
 
 ## Diagrammi di dettaglio
 
