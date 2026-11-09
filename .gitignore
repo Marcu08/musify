@@ -9,3 +9,4 @@ Thumbs.db
 /testdata
 /bench
 *.png.tmp
+/*.png

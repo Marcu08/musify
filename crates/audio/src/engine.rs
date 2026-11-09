@@ -92,6 +92,12 @@ impl AudioEngine {
         self.events.try_recv().ok()
     }
 
+    /// A clone of the event receiver, for a bridge thread that forwards engine
+    /// events to the UI and wakes it.
+    pub fn event_receiver(&self) -> Receiver<Event> {
+        self.events.clone()
+    }
+
     pub fn recv_event(&self) -> Option<Event> {
         self.events.recv().ok()
     }

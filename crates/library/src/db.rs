@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, LibraryError as CoreLibraryError, LibraryProvider,
-    SearchResults, SortDirection, Track, TrackId, TrackSort,
+    LibraryStats, SearchResults, SortDirection, Track, TrackId, TrackSort,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
@@ -97,6 +97,54 @@ impl Library {
             format!("SELECT {TRACK_COLUMNS} FROM tracks t ORDER BY {order} LIMIT ?1 OFFSET ?2");
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(params![limit as i64, offset as i64], track_from_row)?;
+        let mut tracks = Vec::new();
+        for row in rows {
+            tracks.push(row?);
+        }
+        Ok(tracks)
+    }
+
+    pub fn tracks_for_album(
+        &self,
+        album_id: AlbumId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Track>, LibraryError> {
+        let connection = self.lock()?;
+        let sql = format!(
+            "SELECT {TRACK_COLUMNS} FROM tracks t WHERE t.album_id = ?1 \
+             ORDER BY t.disc_number ASC, t.track_number ASC, t.title COLLATE NOCASE ASC \
+             LIMIT ?2 OFFSET ?3"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![album_id.get(), limit as i64, offset as i64],
+            track_from_row,
+        )?;
+        let mut tracks = Vec::new();
+        for row in rows {
+            tracks.push(row?);
+        }
+        Ok(tracks)
+    }
+
+    pub fn tracks_for_artist(
+        &self,
+        artist_id: ArtistId,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Track>, LibraryError> {
+        let connection = self.lock()?;
+        let sql = format!(
+            "SELECT {TRACK_COLUMNS} FROM tracks t WHERE t.artist_id = ?1 \
+             ORDER BY t.album COLLATE NOCASE ASC, t.disc_number ASC, t.track_number ASC, \
+                      t.title COLLATE NOCASE ASC LIMIT ?2 OFFSET ?3"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![artist_id.get(), limit as i64, offset as i64],
+            track_from_row,
+        )?;
         let mut tracks = Vec::new();
         for row in rows {
             tracks.push(row?);
@@ -482,15 +530,6 @@ fn fts_query(query: &str) -> Option<String> {
         })
         .collect();
     (!tokens.is_empty()).then(|| tokens.join(" AND "))
-}
-
-/// Aggregate row counts shown by the UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct LibraryStats {
-    pub tracks: u64,
-    pub albums: u64,
-    pub artists: u64,
-    pub total_duration: Duration,
 }
 
 pub(crate) fn find_track_stamp(

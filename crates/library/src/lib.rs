@@ -9,7 +9,8 @@ mod watcher;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use db::{Library, LibraryStats};
+pub use db::Library;
+pub use musify_core::LibraryStats;
 pub use watcher::LibraryWatcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

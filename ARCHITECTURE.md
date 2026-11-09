@@ -67,6 +67,30 @@ Invarianti:
 - Volume: `AtomicU16` letto dal callback, con smoothing del gain; nessun lock.
 - Resampling: lineare, scelta M1 documentata; sostituibile in `resample.rs`.
 
+## UI Rune (M3)
+
+```text
+UI (Rune, thread principale)
+  ├─ Command  ───────────────▶ AppBackend ──▶ AudioEngine / Library / watcher
+  └─ Event    ◀────────────── eventi audio, scansione, errori
+       ▲
+       └─ Waker Rune: la UI viene svegliata solo quando arriva un evento
+```
+
+- `musify-ui` dipende solo da `musify-core` e da Rune; il backend è il trait
+  `ui::Backend`. L'app implementa il trait in `crates/app/src/backend.rs`.
+- Il thread UI non fa I/O audio o SQLite pesante: le liste vengono lette dal
+  backend al reload; le copertine sono caricate on demand da `ImageCache`.
+- `virtual_rows` + `virtual_rows_version` costruiscono solo le righe visibili;
+  chiavi e versioni cambiano quando cambia la vista.
+- Un bridge thread inoltra gli eventi dell'audio engine nel canale UI e chiama
+  il `Waker`; la scansione usa lo stesso canale, con progress throttled a 4 Hz.
+- Il watcher avvia una scansione incrementale dopo 750 ms di quiete.
+- Su Windows il primo `on_ready` ridimensiona la finestra per correggere il
+  fattore DPI iniziale di Rune; è un workaround locale documentato.
+- Stringhe in `i18n.rs`, ruoli colore in `theme.rs`; nessun testo o colore
+  hardcoded nei componenti.
+
 ## Libreria locale (M2)
 
 ```text

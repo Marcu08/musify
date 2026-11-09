@@ -23,6 +23,7 @@ pub enum Event {
     },
     ScanProgress {
         scanned: u64,
+        total: u64,
         current: Option<PathBuf>,
     },
     ScanFinished {

@@ -69,6 +69,7 @@ pub enum PlaybackState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum RepeatMode {
     #[default]
     Off,
@@ -98,6 +99,15 @@ pub struct SearchResults {
     pub tracks: Vec<Track>,
     pub albums: Vec<Album>,
     pub artists: Vec<Artist>,
+}
+
+/// Aggregate row counts shown by the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LibraryStats {
+    pub tracks: u64,
+    pub albums: u64,
+    pub artists: u64,
+    pub total_duration: Duration,
 }
 
 #[cfg(test)]

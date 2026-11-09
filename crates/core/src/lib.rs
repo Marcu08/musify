@@ -10,8 +10,8 @@ mod traits;
 
 pub use command::Command;
 pub use domain::{
-    Album, Artist, PlaybackState, Playlist, QueueItem, RepeatMode, SearchResults, SortDirection,
-    Track, TrackSort,
+    Album, Artist, LibraryStats, PlaybackState, Playlist, QueueItem, RepeatMode, SearchResults,
+    SortDirection, Track, TrackSort,
 };
 pub use event::Event;
 pub use ids::{AlbumId, ArtistId, PlaylistId, QueueItemId, TrackId};

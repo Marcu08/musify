@@ -11,12 +11,12 @@ milestone opzionale dietro feature flag.
 | M0 — Workspace, CI locale, smoke test Rune | completata |
 | M1 — Motore audio | completata |
 | M2 — Libreria | completata |
-| M3 — UI Rune | da fare |
+| M3 — UI Rune | completata |
 | M4 — Integrazione Windows e rifinitura | da fare |
 | M5 — Spotify (opzionale) | da fare |
 
 Report: `docs/M0-RUNE-REPORT.md`, `docs/M1-AUDIO-REPORT.md`,
-`docs/M2-LIBRARY-REPORT.md`.
+`docs/M2-LIBRARY-REPORT.md`, `docs/M3-UI-REPORT.md`.
 
 ## Requisiti (Windows)
 
@@ -39,6 +39,27 @@ Controlli locali equivalenti alla CI:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 ```
+
+## Interfaccia e uso
+
+1. Apri **Impostazioni** e premi **Aggiungi cartella**: scegli la cartella della
+   musica. La scansione parte subito; il watcher tiene la libreria aggiornata.
+2. Usa **Brani**, **Album**, **Artisti** e la ricerca in alto. La coda si apre
+   dalla sidebar o dal pulsante **Coda** nella barra di riproduzione.
+3. Clicca un brano per riprodurlo, **Riproduci tutto** per accodare la vista
+   corrente. Nella coda puoi spostare, rimuovere e svuotare i brani.
+4. Scorciatoie: Spazio play/pausa, ←/→ seek ±5 s, Ctrl+←/→ brano
+   precedente/successivo, Ctrl+F cerca, Ctrl+R riscansiona, +/− volume,
+   Esc chiude ricerca/filtro, Ctrl+Q esce.
+
+Screenshot: `docs/evidence/musify-tracks.png`, `musify-queue.png`,
+`musify-settings.png`, `musify-search.png`, `musify-albums.png`,
+`musify-artists.png`, `musify-playing.png`.
+
+Misure reali e problemi noti sono in `docs/M3-UI-REPORT.md`: a riposo la CPU è
+0,00%, l'avvio è ~663 ms e la RAM è ~176 MB su questa macchina. I target
+indicativi di 300 ms e 80 MB non sono centrati e sono riportati senza
+arrotondamenti.
 
 ## Motore audio da riga di comando
 

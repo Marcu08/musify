@@ -1,17 +1,44 @@
-//! Rune presentation layer (M3).
+//! Musify's Rune presentation layer.
 //!
-//! Until the Rune smoke test passes this crate stays free of UI dependencies so the
-//! rest of the workspace can be built on any machine.
+//! The UI is presentation only. Commands go to a `Backend`; events and read-only
+//! library queries come back through the same trait. Rune never leaks into the
+//! other crates.
 
-/// Crate marker used by the M0 wiring check.
-pub const CRATE_NAME: &str = "musify-ui";
+mod backend;
+mod i18n;
+mod state;
+mod theme;
+mod view;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use std::sync::Arc;
 
-    #[test]
-    fn crate_is_wired() {
-        assert_eq!(CRATE_NAME, "musify-ui");
-    }
+use rune::{App, AppSpec};
+
+pub use backend::Backend;
+
+const WINDOW_SIZE: (f32, f32) = (1120.0, 620.0);
+
+pub fn run(backend: Arc<dyn Backend>) {
+    let backend_for_init = backend.clone();
+    let mut spec = AppSpec::new(
+        i18n::APP_NAME,
+        WINDOW_SIZE,
+        || unreachable!("App::init supplies the state"),
+        view::view,
+    );
+    spec.min_size = Some((980.0, 600.0));
+    spec.scenes = state::scenes();
+    spec.setup = Some(state::setup);
+    spec.poll = Some(state::poll);
+    spec.on_key = Some(state::on_key);
+    let app = App::new(spec)
+        .init(move || state::UiState::new(backend_for_init.clone()))
+        // Windows may create the first window at 100% DPI before winit reports the
+        // real scale. Resize once on the first ready frame so the viewport and the
+        // native window agree at 125%/150% too.
+        .on_ready(|handle| {
+            handle.resize_instant(WINDOW_SIZE);
+            handle.set_position((0, 0));
+        });
+    app.run();
 }
