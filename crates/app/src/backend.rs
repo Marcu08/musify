@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,12 +8,16 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use musify_audio::AudioEngine;
 use musify_core::{
-    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, RepeatMode, SearchResults,
-    Track, TrackSort,
+    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, RepeatMode,
+    SearchResults, Track, TrackId, TrackSort,
 };
 use musify_library::{Library, LibraryWatcher};
 use musify_ui::Backend;
 use serde::{Deserialize, Serialize};
+use souvlaki::{
+    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
+    SeekDirection,
+};
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -39,6 +44,7 @@ impl Default for Config {
 pub struct AppBackend {
     data_dir: PathBuf,
     config_path: PathBuf,
+    state_path: PathBuf,
     config: Arc<Mutex<Config>>,
     library: Arc<Library>,
     audio: Mutex<Option<AudioEngine>>,
@@ -46,6 +52,26 @@ pub struct AppBackend {
     waker: Arc<Mutex<Option<Waker>>>,
     scan: ScanCoordinator,
     watcher: Mutex<Option<LibraryWatcher>>,
+    smtc: Mutex<Option<MediaControls>>,
+    smtc_snapshot: Arc<Mutex<SmtcSnapshot>>,
+    last_state_save: Mutex<Instant>,
+}
+
+#[derive(Debug, Default)]
+struct SmtcSnapshot {
+    playback: PlaybackState,
+    position: Duration,
+    duration: Option<Duration>,
+    current: Option<musify_core::QueueItem>,
+    metadata_track: Option<TrackId>,
+    last_sync: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SavedState {
+    queue: Vec<String>,
+    current_index: usize,
+    position_ms: u64,
 }
 
 impl AppBackend {
@@ -53,6 +79,7 @@ impl AppBackend {
         let data_dir = app_data_dir();
         std::fs::create_dir_all(&data_dir)?;
         let config_path = data_dir.join("config.toml");
+        let state_path = data_dir.join("state.json");
         let mut config = load_config(&config_path);
         if let Some(folders) = env_folders() {
             config.music_folders = folders;
@@ -112,6 +139,7 @@ impl AppBackend {
         let backend = Self {
             data_dir,
             config_path,
+            state_path,
             config,
             library,
             audio: Mutex::new(audio),
@@ -119,7 +147,18 @@ impl AppBackend {
             waker,
             scan,
             watcher: Mutex::new(None),
+            smtc: Mutex::new(None),
+            smtc_snapshot: Arc::new(Mutex::new(SmtcSnapshot::default())),
+            last_state_save: Mutex::new(Instant::now() - Duration::from_secs(10)),
         };
+        if let Ok(config) = backend.config.lock() {
+            let shuffle = config.shuffle;
+            let repeat = config.repeat;
+            drop(config);
+            backend.send_audio(Command::SetShuffle(shuffle));
+            backend.send_audio(Command::SetRepeat(repeat));
+        }
+        backend.restore_state();
         backend.restart_watcher();
         backend.scan.start();
         Ok(backend)
@@ -179,6 +218,273 @@ impl AppBackend {
             tracing::warn!(%error, "cannot save config");
         }
     }
+
+    fn send_audio(&self, command: Command) {
+        if let Ok(audio) = self.audio.lock()
+            && let Some(audio) = audio.as_ref()
+            && let Err(error) = audio.send(command)
+        {
+            tracing::warn!(%error, "audio command failed");
+        }
+    }
+
+    fn restore_state(&self) {
+        let Ok(text) = std::fs::read_to_string(&self.state_path) else {
+            return;
+        };
+        let saved: SavedState = match serde_json::from_str(&text) {
+            Ok(saved) => saved,
+            Err(error) => {
+                tracing::warn!(%error, "cannot parse state.json");
+                return;
+            }
+        };
+        let mut tracks = Vec::new();
+        for path in &saved.queue {
+            match self.library.track_by_path(Path::new(path)) {
+                Ok(Some(track)) => tracks.push(track),
+                Ok(None) => tracing::debug!(path, "saved queue track is no longer in the library"),
+                Err(error) => tracing::warn!(%error, path, "cannot load saved queue track"),
+            }
+        }
+        if tracks.is_empty() {
+            return;
+        }
+        let start = saved.current_index.min(tracks.len() - 1);
+        let position = Duration::from_millis(saved.position_ms);
+        if let Ok(mut snapshot) = self.smtc_snapshot.lock() {
+            snapshot.current = Some(musify_core::QueueItem {
+                id: musify_core::QueueItemId::new(1),
+                track: tracks[start].clone(),
+            });
+            snapshot.playback = PlaybackState::Paused;
+            snapshot.position = position;
+            snapshot.duration = Some(tracks[start].duration);
+            snapshot.metadata_track = None;
+        }
+        self.send_audio(Command::RestoreQueue {
+            tracks,
+            start_index: start,
+            position,
+        });
+    }
+
+    fn save_state(&self, force: bool) {
+        if !force {
+            let Ok(last) = self.last_state_save.lock() else {
+                return;
+            };
+            if last.elapsed() < Duration::from_secs(2) {
+                return;
+            }
+        }
+        let Ok(audio) = self.audio.lock() else {
+            return;
+        };
+        let Some(audio) = audio.as_ref() else {
+            return;
+        };
+        let snapshot = audio.snapshot();
+        let queue: Vec<String> = snapshot
+            .queue
+            .iter()
+            .map(|item| item.track.path.to_string_lossy().into_owned())
+            .collect();
+        let current_index = snapshot
+            .current
+            .as_ref()
+            .and_then(|current| snapshot.queue.iter().position(|item| item.id == current.id))
+            .unwrap_or(0);
+        let saved = SavedState {
+            queue,
+            current_index,
+            position_ms: u64::try_from(snapshot.position.as_millis()).unwrap_or(u64::MAX),
+        };
+        let write = || -> anyhow::Result<()> {
+            let json = serde_json::to_vec_pretty(&saved)?;
+            let temporary = self.state_path.with_extension("json.tmp");
+            std::fs::write(&temporary, json)?;
+            std::fs::rename(temporary, &self.state_path)?;
+            Ok(())
+        };
+        if let Err(error) = write() {
+            tracing::warn!(%error, "cannot save state.json");
+        } else if let Ok(mut last) = self.last_state_save.lock() {
+            *last = Instant::now();
+        }
+    }
+
+    fn observe_event(&self, event: &Event) {
+        let mut force_metadata = false;
+        let mut force_sync = false;
+        if let Ok(mut snapshot) = self.smtc_snapshot.lock() {
+            match event {
+                Event::TrackChanged(Some(item)) => {
+                    snapshot.current = Some(item.clone());
+                    snapshot.duration =
+                        (!item.track.duration.is_zero()).then_some(item.track.duration);
+                    snapshot.position = Duration::ZERO;
+                    force_metadata = true;
+                    force_sync = true;
+                }
+                Event::TrackChanged(None) => {
+                    snapshot.current = None;
+                    snapshot.duration = None;
+                    force_metadata = true;
+                    force_sync = true;
+                }
+                Event::PlaybackStateChanged(state) => {
+                    snapshot.playback = *state;
+                    force_sync = true;
+                }
+                Event::PositionChanged { position, duration } => {
+                    snapshot.position = *position;
+                    snapshot.duration = *duration;
+                }
+                _ => {}
+            }
+        }
+        if matches!(
+            event,
+            Event::TrackChanged(_)
+                | Event::QueueChanged(_)
+                | Event::PlaybackStateChanged(_)
+                | Event::PositionChanged { .. }
+        ) {
+            self.save_state(false);
+        }
+        if force_sync || matches!(event, Event::PositionChanged { .. }) {
+            self.update_smtc(force_metadata);
+        }
+    }
+
+    fn update_smtc(&self, force_metadata: bool) {
+        let Ok(mut controls) = self.smtc.lock() else {
+            return;
+        };
+        let Some(controls) = controls.as_mut() else {
+            return;
+        };
+        let Ok(mut snapshot) = self.smtc_snapshot.lock() else {
+            return;
+        };
+        if !force_metadata
+            && snapshot
+                .last_sync
+                .is_some_and(|last| last.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        snapshot.last_sync = Some(Instant::now());
+        let current_track = snapshot.current.as_ref().map(|item| item.track.id);
+        if force_metadata || snapshot.metadata_track != current_track {
+            if let Some(item) = &snapshot.current {
+                let cover_url = item
+                    .track
+                    .cover_path
+                    .as_ref()
+                    .map(|path| format!("file://{}", path.display()));
+                let metadata = MediaMetadata {
+                    title: Some(item.track.title.as_str()),
+                    artist: Some(item.track.artist.as_str()),
+                    album: Some(item.track.album.as_str()),
+                    cover_url: cover_url.as_deref(),
+                    duration: Some(item.track.duration),
+                };
+                if let Err(error) = controls.set_metadata(metadata) {
+                    tracing::warn!(%error, "cannot update Windows media metadata");
+                }
+            }
+            snapshot.metadata_track = current_track;
+        }
+        let playback = match snapshot.playback {
+            PlaybackState::Playing => MediaPlayback::Playing {
+                progress: Some(MediaPosition(snapshot.position)),
+            },
+            PlaybackState::Paused => MediaPlayback::Paused {
+                progress: Some(MediaPosition(snapshot.position)),
+            },
+            PlaybackState::Stopped => MediaPlayback::Stopped,
+        };
+        if let Err(error) = controls.set_playback(playback) {
+            tracing::warn!(%error, "cannot update Windows media playback state");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn start_smtc(&self, hwnd: isize) {
+        if self.smtc.lock().is_ok_and(|controls| controls.is_some()) {
+            return;
+        }
+        let config = PlatformConfig {
+            display_name: "Musify",
+            dbus_name: "musify",
+            hwnd: Some(hwnd as *mut c_void),
+        };
+        match MediaControls::new(config) {
+            Ok(mut controls) => {
+                let command_tx = self
+                    .audio
+                    .lock()
+                    .ok()
+                    .and_then(|audio| audio.as_ref().map(AudioEngine::command_sender));
+                let snapshot = Arc::clone(&self.smtc_snapshot);
+                let attached = controls.attach(move |event| {
+                    tracing::info!(?event, "evento Windows SMTC");
+                    let command = match event {
+                        MediaControlEvent::Play | MediaControlEvent::Toggle => {
+                            Some(Command::TogglePlayPause)
+                        }
+                        MediaControlEvent::Pause => Some(Command::Pause),
+                        MediaControlEvent::Stop => Some(Command::Stop),
+                        MediaControlEvent::Next => Some(Command::Next),
+                        MediaControlEvent::Previous => Some(Command::Previous),
+                        MediaControlEvent::SetPosition(MediaPosition(position)) => {
+                            Some(Command::Seek(position))
+                        }
+                        MediaControlEvent::Seek(direction) => {
+                            let position = snapshot
+                                .lock()
+                                .map_or(Duration::ZERO, |snapshot| snapshot.position);
+                            let target = if direction == SeekDirection::Forward {
+                                position + Duration::from_secs(10)
+                            } else {
+                                position.saturating_sub(Duration::from_secs(10))
+                            };
+                            Some(Command::Seek(target))
+                        }
+                        _ => None,
+                    };
+                    if let (Some(command_tx), Some(command)) = (&command_tx, command) {
+                        let _ = command_tx.send(command);
+                    }
+                });
+                if let Err(error) = attached {
+                    tracing::warn!(%error, "cannot attach Windows media controls");
+                    return;
+                }
+                if let Ok(mut slot) = self.smtc.lock() {
+                    *slot = Some(controls);
+                }
+                self.update_smtc(true);
+                tracing::info!("Windows SMTC collegato");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "cannot create Windows media controls");
+            }
+        }
+    }
+}
+
+impl Drop for AppBackend {
+    fn drop(&mut self) {
+        self.save_state(true);
+        if let Ok(audio) = self.audio.lock()
+            && let Some(audio) = audio.as_ref()
+        {
+            let _ = audio.send(Command::Shutdown);
+        }
+    }
 }
 
 impl Backend for AppBackend {
@@ -195,26 +501,36 @@ impl Backend for AppBackend {
             }
             _ => {}
         }
-        if let Ok(audio) = self.audio.lock()
-            && let Some(audio) = audio.as_ref()
-            && let Err(error) = audio.send(command)
-        {
-            tracing::warn!(%error, "audio command failed");
-        }
+        self.send_audio(command);
     }
 
     fn try_recv_event(&self) -> Option<Event> {
-        let events = match self.events.lock() {
-            Ok(events) => events,
-            Err(poisoned) => poisoned.into_inner(),
+        let event = {
+            let events = match self.events.lock() {
+                Ok(events) => events,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            events.try_recv().ok()
         };
-        events.try_recv().ok()
+        if let Some(event) = &event {
+            self.observe_event(event);
+        }
+        event
     }
 
     fn set_waker(&self, waker: Waker) {
         if let Ok(mut slot) = self.waker.lock() {
             *slot = Some(waker);
         }
+    }
+
+    fn window_ready(&self, hwnd: isize) {
+        #[cfg(target_os = "windows")]
+        if std::env::var("MUSIFY_NO_SMTC").as_deref() != Ok("1") {
+            self.start_smtc(hwnd);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = hwnd;
     }
 
     fn tracks(&self, sort: TrackSort, limit: usize, offset: usize) -> Result<Vec<Track>, String> {

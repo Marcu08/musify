@@ -13,6 +13,12 @@ pub enum Command {
         tracks: Vec<Track>,
         start_index: usize,
     },
+    /// Restore a saved queue without starting playback, paused at `position`.
+    RestoreQueue {
+        tracks: Vec<Track>,
+        start_index: usize,
+        position: Duration,
+    },
     Enqueue(Vec<Track>),
     Pause,
     Resume,

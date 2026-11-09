@@ -88,6 +88,12 @@ impl AudioEngine {
             .map_err(|_| AudioError::EngineStopped)
     }
 
+    /// A clone of the command sender, for OS integrations that must send
+    /// media-key commands without owning the engine handle.
+    pub fn command_sender(&self) -> Sender<Command> {
+        self.commands.clone()
+    }
+
     pub fn try_recv_event(&self) -> Option<Event> {
         self.events.try_recv().ok()
     }
@@ -239,6 +245,11 @@ impl EngineThread {
                 tracks,
                 start_index,
             } => self.start_tracks(tracks, start_index),
+            Command::RestoreQueue {
+                tracks,
+                start_index,
+                position,
+            } => self.start_tracks_internal(tracks, start_index, false, position),
             Command::Enqueue(tracks) => {
                 let items: Vec<QueueItem> = tracks.into_iter().map(|t| self.item(t)).collect();
                 self.queue.enqueue(items);
@@ -300,6 +311,16 @@ impl EngineThread {
     }
 
     fn start_tracks(&mut self, tracks: Vec<Track>, start_index: usize) {
+        self.start_tracks_internal(tracks, start_index, true, Duration::ZERO);
+    }
+
+    fn start_tracks_internal(
+        &mut self,
+        tracks: Vec<Track>,
+        start_index: usize,
+        autoplay: bool,
+        position: Duration,
+    ) {
         self.flush_stream(false);
         self.decoder = None;
         self.current = None;
@@ -318,7 +339,14 @@ impl EngineThread {
         }
         if self.open_current(0) {
             self.prefill();
-            self.set_state(PlaybackState::Playing);
+            if autoplay {
+                self.set_state(PlaybackState::Playing);
+            } else {
+                self.set_state(PlaybackState::Paused);
+                if !position.is_zero() {
+                    self.seek(position);
+                }
+            }
         } else {
             self.set_state(PlaybackState::Stopped);
             self.emit(Event::TrackChanged(None));

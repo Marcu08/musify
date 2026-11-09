@@ -152,6 +152,14 @@ impl Library {
         Ok(tracks)
     }
 
+    pub fn track_by_path(&self, path: &Path) -> Result<Option<Track>, LibraryError> {
+        let connection = self.lock()?;
+        let sql = format!("SELECT {TRACK_COLUMNS} FROM tracks t WHERE t.path = ?1");
+        Ok(connection
+            .query_row(&sql, params![path.to_string_lossy()], track_from_row)
+            .optional()?)
+    }
+
     pub fn albums_page(&self, limit: usize, offset: usize) -> Result<Vec<Album>, LibraryError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare(

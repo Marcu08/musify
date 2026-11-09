@@ -62,6 +62,10 @@ file FLAC generati e configurata via `MUSIFY_DATA_DIR`/`MUSIFY_MUSIC_DIRS`.
 
 ## Misure (release, Windows 11, Ryzen 5 5625U, 12 thread)
 
+> Nota: con SMTC e persistenza (M4) le misure di avvio hanno più varianza;
+> vedi `docs/M4-WINDOWS-REPORT.md`. La cifra 663 ms è la misura M3 più
+> favorevole, non una garanzia.
+
 | Metrica | Valore | Obiettivo indicativo |
 | --- | --- | --- |
 | Avvio fino al segnale `on_ready` (`RUNE_READY_DIR`) | **663 ms** (cache calda) | < 300 ms |

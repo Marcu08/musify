@@ -20,6 +20,7 @@ const WINDOW_SIZE: (f32, f32) = (1120.0, 620.0);
 
 pub fn run(backend: Arc<dyn Backend>) {
     let backend_for_init = backend.clone();
+    let backend_for_ready = backend.clone();
     let mut spec = AppSpec::new(
         i18n::APP_NAME,
         WINDOW_SIZE,
@@ -36,9 +37,19 @@ pub fn run(backend: Arc<dyn Backend>) {
         // Windows may create the first window at 100% DPI before winit reports the
         // real scale. Resize once on the first ready frame so the viewport and the
         // native window agree at 125%/150% too.
-        .on_ready(|handle| {
+        .on_ready(move |handle| {
             handle.resize_instant(WINDOW_SIZE);
             handle.set_position((0, 0));
+            #[cfg(target_os = "windows")]
+            if let Ok(Some(hwnd)) = handle.with_raw_handle(|raw| {
+                use rune::raw_window_handle::RawWindowHandle;
+                match raw.as_raw() {
+                    RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+                    _ => None,
+                }
+            }) {
+                backend_for_ready.window_ready(hwnd);
+            }
         });
     app.run();
 }

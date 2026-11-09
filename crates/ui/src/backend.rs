@@ -28,5 +28,6 @@ pub trait Backend: Send + Sync {
 
     fn playback_settings(&self) -> (u16, bool, RepeatMode);
     fn output_info(&self) -> (u32, u16);
+    fn window_ready(&self, _hwnd: isize) {}
     fn shutdown(&self);
 }

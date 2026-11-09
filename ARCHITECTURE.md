@@ -91,6 +91,23 @@ UI (Rune, thread principale)
 - Stringhe in `i18n.rs`, ruoli colore in `theme.rs`; nessun testo o colore
   hardcoded nei componenti.
 
+## Integrazione Windows (M4)
+
+- **SMTC**: `souvlaki` riceve l'HWND da Rune in `on_ready`
+  (`with_raw_handle`), invia a Windows titolo/artista/album/durata/copertina e
+  riceve Play/Pause/Stop/Next/Previous/Seek/SetPosition. Gli eventi diventano
+  `Command` per lo stesso audio engine della UI.
+- **Tasti multimediali**: Windows li instrada alla sessione SMTC; non c'è un
+  hook di tastiera separato.
+- **Persistenza**:
+  - `config.toml`: cartelle, volume, shuffle, repeat; scrittura atomica.
+  - `state.json`: coda come path, indice corrente, posizione; scrittura atomica
+    con throttle 2 s e salvataggio alla chiusura.
+  - Al riavvio i path vengono risolti con la libreria; la coda viene ripristinata
+    con `Command::RestoreQueue`, che apre e prefill-a il brano ma resta in pausa.
+- **DPI**: Rune crea la prima finestra con lo scale iniziale; `on_ready` la
+  ridimensiona/riposiziona. È un workaround circoscritto alla UI.
+
 ## Libreria locale (M2)
 
 ```text

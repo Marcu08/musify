@@ -12,11 +12,12 @@ milestone opzionale dietro feature flag.
 | M1 — Motore audio | completata |
 | M2 — Libreria | completata |
 | M3 — UI Rune | completata |
-| M4 — Integrazione Windows e rifinitura | da fare |
-| M5 — Spotify (opzionale) | da fare |
+| M4 — Integrazione Windows e rifinitura | completata |
+| M5 — Spotify (opzionale) | non implementata |
 
 Report: `docs/M0-RUNE-REPORT.md`, `docs/M1-AUDIO-REPORT.md`,
-`docs/M2-LIBRARY-REPORT.md`, `docs/M3-UI-REPORT.md`.
+`docs/M2-LIBRARY-REPORT.md`, `docs/M3-UI-REPORT.md`,
+`docs/M4-WINDOWS-REPORT.md`.
 
 ## Requisiti (Windows)
 
@@ -56,10 +57,22 @@ Screenshot: `docs/evidence/musify-tracks.png`, `musify-queue.png`,
 `musify-settings.png`, `musify-search.png`, `musify-albums.png`,
 `musify-artists.png`, `musify-playing.png`.
 
-Misure reali e problemi noti sono in `docs/M3-UI-REPORT.md`: a riposo la CPU è
-0,00%, l'avvio è ~663 ms e la RAM è ~176 MB su questa macchina. I target
-indicativi di 300 ms e 80 MB non sono centrati e sono riportati senza
-arrotondamenti.
+Misure reali e problemi noti sono in `docs/M3-UI-REPORT.md` e
+`docs/M4-WINDOWS-REPORT.md`: a riposo la CPU è 0,00%, l'avvio dell'app completa è
+~1,0–2,7 s (mediana ~1,5 s; 0,66 s la misura M3 più favorevole) e la RAM è
+~176 MB su questa macchina. I target indicativi di 300 ms e 80 MB non sono
+centrati e sono riportati senza arrotondamenti.
+
+## Tasti multimediali e persistenza
+
+- I tasti Play/Pause, Next, Previous, Stop e Seek sono collegati a Windows
+  tramite SMTC (souvlaki). L'overlay di Windows mostra titolo, artista e
+  copertina.
+- `state.json` salva coda, brano corrente e posizione. Alla riapertura la coda
+  viene ripristinata in pausa, senza avviare l'audio.
+- `config.toml` salva cartelle, volume, shuffle e repeat.
+- Ctrl+Q chiude e salva; la chiusura con la X della finestra passa dallo stesso
+  `Drop` del backend.
 
 ## Motore audio da riga di comando
 
