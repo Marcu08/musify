@@ -67,6 +67,29 @@ Invarianti:
 - Volume: `AtomicU16` letto dal callback, con smoothing del gain; nessun lock.
 - Resampling: lineare, scelta M1 documentata; sostituibile in `resample.rs`.
 
+## Libreria locale (M2)
+
+```text
+cartelle musicali
+   → walkdir (raccolta file, dedup per path normalizzato)
+   → stat per file: mtime + size vs SQLite (invariati: skip)
+   → rayon: lofty (tag) + cover (decodifica, resize 512 px, JPEG)
+   → transazione SQLite a batch di 500
+   → FTS5 (titolo/artista/album) + tabelle albums/artists
+   → rimozione dei file spariti sotto le cartelle scansionate
+   → pulizia album/artisti orfani
+```
+
+- WAL e `busy_timeout=5000`: le letture della UI non bloccano la scansione.
+- La connessione della UI e quella dello scanner sono separate.
+- Copertine: `covers/<blake3>.jpg`, contenuto indirizzato, riuso automatico.
+- La ricerca usa FTS5 con `remove_diacritics 2`; se FTS5 non è disponibile
+  (`init_schema` fallisce) usa `LIKE` con escape di `%`, `_` e `\`.
+- `notify` osserva le cartelle e, dopo 750 ms di quiete, emette un segnale;
+  l'app lancia la scansione incrementale. Il watcher non scrive nel DB.
+- Schema: `tracks`, `albums`, `artists`, `playlists`, `playlist_tracks`.
+  Le playlist sono predisposte nello schema, la UI arriverà dopo l'MVP.
+
 ## Persistenza
 
 - `config.toml`: cartelle musicali, volume, shuffle/repeat, preferenze UI.

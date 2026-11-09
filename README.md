@@ -10,12 +10,13 @@ milestone opzionale dietro feature flag.
 | --- | --- |
 | M0 — Workspace, CI locale, smoke test Rune | completata |
 | M1 — Motore audio | completata |
-| M2 — Libreria | da fare |
+| M2 — Libreria | completata |
 | M3 — UI Rune | da fare |
 | M4 — Integrazione Windows e rifinitura | da fare |
 | M5 — Spotify (opzionale) | da fare |
 
-Report: `docs/M0-RUNE-REPORT.md`, `docs/M1-AUDIO-REPORT.md`.
+Report: `docs/M0-RUNE-REPORT.md`, `docs/M1-AUDIO-REPORT.md`,
+`docs/M2-LIBRARY-REPORT.md`.
 
 ## Requisiti (Windows)
 
@@ -51,6 +52,19 @@ cargo run -p musify-audio --bin audio-cli -- `
 Comandi da stdin: `pause`, `resume`, `toggle`, `next`, `prev`, `seek 12.5`,
 `vol 70`, `status`, `quit`. Gli asset di test si rigenerano con
 `scripts/make-test-assets.ps1` (richiede ffmpeg).
+
+## Libreria da riga di comando
+
+```powershell
+cargo run -p musify-library --bin library-cli -- scan C:\Musica
+cargo run -p musify-library --bin library-cli -- search "citta"
+cargo run -p musify-library --bin library-cli -- stats
+cargo run -p musify-library --bin library-cli -- bench C:\Musica
+```
+
+`bench` esegue una scansione a freddo e una incrementale e stampa i tempi.
+Su 10.000 file di prova: 8,51 s la prima, 0,98 s la seconda (release, dettagli in
+`docs/M2-LIBRARY-REPORT.md`).
 
 ## Struttura
 
