@@ -129,25 +129,25 @@ prova di più ore: vedere i limiti.
 
 ### Misura RAM/CPU con e senza radio
 
-Stessa macchina, stessa build release (`9688eae`), 10 avvii, finestra in primo
+Stessa macchina, stessa build release (`ca9c660`), 10 avvii, finestra in primo
 piano, 5 s di campionamento CPU dopo 2 s di assestamento. La prova locale usa il
 brano FLAC M4.5; la prova radio usa MANGORADIO.
 
 | Metrica | Locale (M5) | Radio MANGORADIO | Differenza |
 | --- | ---: | ---: | ---: |
-| Working set | 187,41 MB | 194,85 MB | +7,44 MB |
-| Private bytes | 171,50 MB | 174,30 MB | +2,80 MB |
-| CPU un core | 7,64% | 8,42% | +0,78 pp |
-| CPU 12 thread | 0,64% | 0,70% | +0,06 pp |
+| Working set | 187,46 MB | 194,81 MB | +7,35 MB |
+| Private bytes | 171,53 MB | 174,68 MB | +3,15 MB |
+| CPU un core | 7,49% | 8,57% | +1,08 pp |
+| CPU 12 thread | 0,62% | 0,71% | +0,09 pp |
 | Underrun | 0 | 0 | — |
 
 Dettaglio e valori grezzi: [M5-LOCAL-MEASURE.md](M5-LOCAL-MEASURE.md) e
-[M5-RADIO-MEASURE.md](M5-RADIO-MEASURE.md) (radio: CPU 6,24–9,99% di un core;
-locale 6,23–9,35%). La radio costa circa 7,4 MB di working set e 2,8 MB di
-private bytes in più (TLS, buffer 128 KiB–1 MiB, decoding MP3) e circa 0,8 punti
-percentuali di un core in più; entrambe le misure restano sotto il 10% di un
+[M5-RADIO-MEASURE.md](M5-RADIO-MEASURE.md) (radio: CPU 6,87–10,60% di un core;
+locale 5,92–11,86%). La radio costa circa 7,4 MB di working set e 3,2 MB di
+private bytes in più (TLS, buffer 128 KiB–1 MiB, decoding MP3) e circa 1,1 punti
+percentuali di un core in più; entrambe le misure restano intorno al 10% di un
 core. Il runtime Tokio non è attivo a riposo: l'avvio a riposo della build M5
-resta 1,091 s, working set 185,28 MB, private 170,55 MB, CPU 0,31%.
+resta 1,102 s, working set 185,28 MB, private 169,57 MB, CPU 0,31%.
 
 ### Evidenze UI
 

@@ -1,7 +1,7 @@
 # M5 - Radio internet attiva
 
-Data: 2026-11-10 00:23:03
-Commit: `9688eae`
+Data: 2026-11-10 00:43:08
+Commit: `ca9c660`
 Macchina: AMD Ryzen 5 5625U with Radeon Graphics · 12 thread · 7.3 GB RAM
 OS: Microsoft Windows 11 Home 10.0.26300
 Rust: `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
@@ -20,10 +20,10 @@ Il "ready" di Rune arriva dopo il primo frame e il ritorno di `on_ready`; non è
 | Riposo | working set | n/d |
 | Riposo | private bytes | n/d |
 | Riposo | CPU un core | n/d |
-| Riproduzione | working set | 194,85 MB (min 194,52, max 195,38) |
-| Riproduzione | private bytes | 174,30 MB (min 172,95, max 175,68) |
-| Riproduzione | CPU un core | 8,42 % (min 6,24, max 9,99) |
-| Riproduzione | CPU normalizzata | 0,70 % (min 0,52, max 0,83) |
+| Riproduzione | working set | 194,81 MB (min 194,59, max 195,14) |
+| Riproduzione | private bytes | 174,68 MB (min 172,93, max 175,56) |
+| Riproduzione | CPU un core | 8,57 % (min 6,87, max 10,60) |
+| Riproduzione | CPU normalizzata | 0,71 % (min 0,57, max 0,88) |
 
 ## Valori grezzi — startup e riposo
 
@@ -34,16 +34,16 @@ Il "ready" di Rune arriva dopo il primo frame e il ritorno di `on_ready`; non è
 
 | # | ready ms | processo→ready ms | WS MB | Private MB | CPU % un core | CPU % normalizzata |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1959 | 2626.5 | 194.7 | 175.49 | 7.792 | 0.649 |
-| 2 | 1085 | 1105.2 | 194.84 | 175.27 | 8.418 | 0.701 |
-| 3 | 1097 | 1116.8 | 195.38 | 174.18 | 7.479 | 0.623 |
-| 4 | 1082 | 1118.8 | 194.81 | 172.95 | 8.435 | 0.703 |
-| 5 | 1097 | 1134.6 | 195.01 | 173.66 | 6.239 | 0.52 |
-| 6 | 1059 | 1081.1 | 194.61 | 174.41 | 6.544 | 0.545 |
-| 7 | 1233 | 1253.1 | 194.86 | 174.51 | 9.042 | 0.753 |
-| 8 | 1122 | 1153.5 | 194.88 | 175.68 | 8.427 | 0.702 |
-| 9 | 1114 | 1145.5 | 194.52 | 173.08 | 8.734 | 0.728 |
-| 10 | 1103 | 1133.6 | 194.98 | 173.68 | 9.988 | 0.832 |
+| 1 | 2088 | 2791.9 | 194.82 | 175.56 | 8.422 | 0.702 |
+| 2 | 1112 | 1152 | 194.98 | 172.96 | 9.372 | 0.781 |
+| 3 | 1091 | 1123.2 | 194.91 | 174.48 | 9.349 | 0.779 |
+| 4 | 1064 | 1096.2 | 194.59 | 175.47 | 9.351 | 0.779 |
+| 5 | 1146 | 1170.5 | 194.94 | 175.09 | 8.726 | 0.727 |
+| 6 | 1127 | 1153.2 | 194.6 | 174.47 | 10.602 | 0.884 |
+| 7 | 1078 | 1106.7 | 195.14 | 175.24 | 6.872 | 0.573 |
+| 8 | 1069 | 1102.4 | 194.79 | 174.88 | 7.805 | 0.65 |
+| 9 | 1209 | 1227.8 | 194.79 | 174.14 | 6.867 | 0.572 |
+| 10 | 1120 | 1151.3 | 194.6 | 172.93 | 7.799 | 0.65 |
 
 ## Note di lettura
 
