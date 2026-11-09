@@ -1,0 +1,15 @@
+[package]
+name = "musify-spotify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+musify-core.workspace = true
+
+[lints]
+workspace = true

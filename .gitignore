@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.pdb
+*.log
+.DS_Store
+Thumbs.db
+
+# Local test assets and generated reports
+/testdata
+/bench
+*.png.tmp

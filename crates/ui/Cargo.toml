@@ -1,0 +1,18 @@
+[package]
+name = "musify-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+musify-core.workspace = true
+# Rune is pre-release: pin an immutable `dev` rev (2026-11-09) and never a branch.
+# https://github.com/anomalyco/rune/tree/757bcb1d1da1b3f80484f36ef610b83ddbcc6003
+rune = { git = "https://github.com/anomalyco/rune", rev = "757bcb1d1da1b3f80484f36ef610b83ddbcc6003", default-features = false, features = ["accessibility", "embedded-fonts"] }
+
+[[example]]
+name = "rune_smoke"
+
+[lints]
+workspace = true
