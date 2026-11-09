@@ -1,8 +1,10 @@
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
+use musify_core::{SourceId, StreamEvent};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
@@ -12,6 +14,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::error::AudioError;
+use crate::http_stream::HttpStream;
 use crate::resample::Resampler;
 
 /// One decoded track, converted to interleaved stereo f32 at the output rate.
@@ -28,6 +31,7 @@ pub(crate) struct TrackDecoder {
     eof: bool,
     resampler_flushed: bool,
     duration: Option<Duration>,
+    stream: Option<Arc<HttpStream>>,
 }
 
 impl TrackDecoder {
@@ -39,6 +43,51 @@ impl TrackDecoder {
         if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
             hint.with_extension(extension);
         }
+        Self::open_source(
+            stream,
+            hint,
+            output_rate,
+            format!("{}", path.display()),
+            None,
+        )
+    }
+
+    pub fn open_stream(source: &SourceId, output_rate: u32) -> Result<Self, AudioError> {
+        let handle = Arc::new(HttpStream::start(source.uri().to_string()));
+        let content_type = handle.wait_ready()?.unwrap_or_default();
+        let mut hint = Hint::new();
+        let extension = match content_type.as_str() {
+            value if value.contains("mpeg") => Some("mp3"),
+            value if value.contains("aac") => Some("aac"),
+            value if value.contains("ogg") => Some("ogg"),
+            value if value.contains("flac") => Some("flac"),
+            _ => source
+                .uri()
+                .rsplit('/')
+                .next()
+                .and_then(|name| name.split('?').next())
+                .and_then(|name| name.rsplit_once('.').map(|(_, ext)| ext)),
+        };
+        if let Some(extension) = extension {
+            hint.with_extension(extension);
+        }
+        let reader = handle.reader();
+        Self::open_source(
+            MediaSourceStream::new(Box::new(reader), Default::default()),
+            hint,
+            output_rate,
+            source.uri().to_string(),
+            Some(handle),
+        )
+    }
+
+    fn open_source(
+        stream: MediaSourceStream<'static>,
+        hint: Hint,
+        output_rate: u32,
+        description: String,
+        stream_handle: Option<Arc<HttpStream>>,
+    ) -> Result<Self, AudioError> {
         let reader = symphonia::default::get_probe()
             .probe(
                 &hint,
@@ -46,9 +95,7 @@ impl TrackDecoder {
                 FormatOptions::default(),
                 MetadataOptions::default(),
             )
-            .map_err(|error| {
-                AudioError::Decode(format!("cannot probe {}: {error}", path.display()))
-            })?;
+            .map_err(|error| AudioError::Decode(format!("cannot probe {description}: {error}")))?;
 
         let (track_id, time_base, duration, source_rate, codec_params) = {
             let track = reader
@@ -99,11 +146,18 @@ impl TrackDecoder {
             eof: false,
             resampler_flushed: false,
             duration,
+            stream: stream_handle,
         })
     }
 
     pub fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    pub fn take_stream_updates(&self) -> Vec<StreamEvent> {
+        self.stream
+            .as_ref()
+            .map_or_else(Vec::new, |stream| stream.take_updates())
     }
 
     /// Decode until `target_frames` stereo frames are available or the track ends.
@@ -253,6 +307,47 @@ mod tests {
     #[test]
     fn decodes_mp3() {
         decode_all("tone.mp3");
+    }
+
+    #[test]
+    fn decodes_an_http_stream() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let bytes =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assets/tone.mp3"))
+                .expect("read tone");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!("http://{}/live.mp3", listener.local_addr().expect("addr"));
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                if socket.read(&mut byte).unwrap_or(0) == 0 {
+                    break;
+                }
+                request.push(byte[0]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: ")
+                .expect("headers");
+            socket
+                .write_all(bytes.len().to_string().as_bytes())
+                .expect("length");
+            socket.write_all(b"\r\n\r\n").expect("end headers");
+            socket.write_all(&bytes).expect("body");
+            socket.flush().expect("flush");
+        });
+        let source = musify_core::SourceId::radio(url);
+        let mut decoder = TrackDecoder::open_stream(&source, 48_000).expect("open stream");
+        let mut out = Vec::new();
+        let frames = decoder.decode_into(&mut out, 4096).expect("decode");
+        assert!(frames > 0, "the HTTP stream should decode audio");
+        assert!(out.iter().all(|sample| sample.is_finite()));
+        drop(decoder);
+        let _ = server.join();
     }
 
     #[test]

@@ -42,10 +42,14 @@ un commit preciso e confinata al crate `musify-ui`.
   shuffle, repeat, coda modificabile.
 - **Gapless**: i sample del brano successivo entrano nello stesso stream; il
   cambio metadati segue il confine di frame. Nessun crossfade.
+- **Radio internet**: sezione Fonti con Radio Browser (nome, paese, genere/tag),
+  preferiti locali, streaming MP3/AAC/Ogg con buffer adattivo, riconnessione,
+  metadati ICY e badge della fonte.
 - **Windows-native**: SMTC, overlay di Windows, tasti multimediali, dialog
   nativo per scegliere le cartelle.
 - **Persistenza**: coda, brano corrente e posizione in `state.json`; cartelle,
-  volume, shuffle e repeat in `config.toml`.
+  volume, shuffle e repeat in `config.toml`. Gli stream radio non vengono
+  salvati.
 - **Scorciatoie**: Spazio, frecce, Ctrl+F, Ctrl+R, +/−, Esc, Ctrl+Q.
 - **Misure trasparenti**: i numeri reali sono riportati sotto, inclusi i target
   che non sono stati raggiunti.
@@ -157,9 +161,10 @@ questa macchina.
 | Resampler sinc 44,1 → 48 kHz | **1,25% di un core** (lineare: 0,31%), 0 underrun | < 2% |
 | Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
 | UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
-| UI in riproduzione | **7,17% di un core**, **0,60%** su 12 thread | < 2% |
+| UI in riproduzione locale | **7,17% di un core**, **0,60%** su 12 thread | < 2% |
+| Radio MP3 128 kbps | **8,58% di un core**, **0,71%** su 12 thread, +7,9 MB | < 2% |
 | Avvio app completa | **1,11 s** mediana (min 1,07, max 1,59) | < 300 ms |
-| RAM | **185 MB** working set a riposo, 187 MB in riproduzione | < 80 MB |
+| RAM | **185 MB** working set a riposo, 187 MB locale, 195 MB radio | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
 l'inizializzazione GPU sono la parte dominante. La UI a riposo non ridisegna.
@@ -177,7 +182,7 @@ i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
 | M3 — UI Rune | completata | [M3](docs/M3-UI-REPORT.md) |
 | M4 — Windows, SMTC, persistenza | completata | [M4](docs/M4-WINDOWS-REPORT.md) |
 | M4.5 — Prestazioni e qualità locale | completata | [M4.5](docs/M45-REPORT.md) |
-| M5 — Fonti online e radio internet | pianificata | — |
+| M5 — Fonti online e radio internet | completata (radio); Spotify no | [M5](docs/M5-RADIO-REPORT.md) |
 
 ## Sviluppo
 
@@ -229,8 +234,14 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 - Il dialogo nativo delle cartelle non è stato automatizzato nei test desktop;
   la configurazione via TOML e variabili d'ambiente è verificata. La checklist
   manuale è in [docs/MANUAL-CHECKLIST.md](docs/MANUAL-CHECKLIST.md).
-- M5 è pianificata: fonti online generalizzate e radio internet. Il crate
-  `musify-spotify` resta uno scheletro compilabile dietro feature `spotify`.
+- La radio usa stream HTTP progressivi MP3/AAC/Ogg. HLS non è supportato; una
+  stazione HLS fallisce con un errore chiaro.
+- La riconnessione radio è coperta da test sul trasporto HTTP e sui metadati, non
+  da una prova di più ore. Per Ogg un cambio di stream a metà può richiedere un
+  riavvio del decoder.
+- La cache delle ricerche radio non ha scadenza e non c'è copertina della
+  stazione (favicon): la UI usa il badge FM.
+- `musify-spotify` resta uno scheletro compilabile dietro feature `spotify`.
 
 ## Note legali
 

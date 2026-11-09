@@ -1,6 +1,7 @@
 param(
     [string]$Output = "docs/M45-BASELINE.md",
-    [string]$Label = "Baseline prestazioni",
+    [string]$Label = "M4.5 — Baseline prestazioni",
+    [string]$RadioUrl = "",
     [int]$Runs = 10,
     [switch]$NoSmtc,
     [switch]$SkipBuild
@@ -107,10 +108,15 @@ function Stop-App($process) {
 }
 
 function Invoke-Run([bool]$Autoplay) {
-    if ($Autoplay) {
+    if ($RadioUrl) {
+        $env:MUSIFY_AUTOPLAY_RADIO = $RadioUrl
+        Remove-Item Env:MUSIFY_AUTOPLAY -ErrorAction SilentlyContinue
+    } elseif ($Autoplay) {
+        Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
         $env:MUSIFY_AUTOPLAY = "1"
     } else {
         Remove-Item Env:MUSIFY_AUTOPLAY -ErrorAction SilentlyContinue
+        Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
     }
     Reset-Ready
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -230,16 +236,21 @@ $rustc = (rustc --version)
 $idleRuns = @()
 $playRuns = @()
 
-Write-Host "M4.5 benchmark: $Runs avvii di startup + $Runs avvii in riproduzione"
-for ($i = 1; $i -le $Runs; $i++) {
-    Write-Host ("  startup {0}/{1}" -f $i, $Runs)
-    $idleRuns += Invoke-Run $false
+if ($RadioUrl) {
+    Write-Host "M4.5 benchmark radio: $Runs avvii con $RadioUrl"
+} else {
+    Write-Host "M4.5 benchmark: $Runs avvii di startup + $Runs avvii in riproduzione"
+    for ($i = 1; $i -le $Runs; $i++) {
+        Write-Host ("  startup {0}/{1}" -f $i, $Runs)
+        $idleRuns += Invoke-Run $false
+    }
 }
 Remove-Item (Join-Path $dataDir "state.json") -Force -ErrorAction SilentlyContinue
 for ($i = 1; $i -le $Runs; $i++) {
     Write-Host ("  playback {0}/{1}" -f $i, $Runs)
     $playRuns += Invoke-Run $true
 }
+Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
 
 $idleReady = @($idleRuns | ForEach-Object { $_.ReadyMs })
 $idleWall = @($idleRuns | ForEach-Object { $_.WallMs })
@@ -252,7 +263,7 @@ $playCpu = @($playRuns | ForEach-Object { $_.CpuOneCorePct })
 $playCpuNorm = @($playRuns | ForEach-Object { $_.CpuNormalizedPct })
 
 $markdown = @"
-# M4.5 — $Label
+# $Label
 
 Data: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Commit: ``$commit``
@@ -261,6 +272,7 @@ OS: $($os.Caption) $($os.Version)
 Rust: ``$rustc``
 Build: release, ``$([System.IO.Path]::GetFileName($exe))``
 SMTC: $(if ($NoSmtc) { "disattivato (MUSIFY_NO_SMTC=1)" } else { "attivo" })
+Radio: $(if ($RadioUrl) { $RadioUrl } else { "non attiva" })
 Metodo: 10 avvii, segnale ``RUNE_READY_DIR``, 2 s di assestamento, 5 s di campionamento CPU.
 Il "ready" di Rune arriva dopo il primo frame e il ritorno di ``on_ready``; non è il primo pixel puro.
 
@@ -326,5 +338,7 @@ $all | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
 Write-Host ""
 Write-Host "Scritto: $outPath"
 Write-Host "Scritto: $csvPath"
-Write-Host ("Riposo: ready {0:N0} ms, WS {1:N2} MB, private {2:N2} MB, CPU {3:N2}%" -f (Get-Median $idleReady), (Get-Median $idleWs), (Get-Median $idlePrivate), (Get-Median $idleCpu))
+if ($idleRuns.Count -gt 0) {
+    Write-Host ("Riposo: ready {0:N0} ms, WS {1:N2} MB, private {2:N2} MB, CPU {3:N2}%" -f (Get-Median $idleReady), (Get-Median $idleWs), (Get-Median $idlePrivate), (Get-Median $idleCpu))
+}
 Write-Host ("Riproduzione: WS {0:N2} MB, private {1:N2} MB, CPU {2:N2}% un core, {3:N2}% normalizzata" -f (Get-Median $playWs), (Get-Median $playPrivate), (Get-Median $playCpu), (Get-Median $playCpuNorm))

@@ -9,10 +9,11 @@ use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use musify_audio::AudioEngine;
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, RepeatMode,
-    SearchResults, Track, TrackId, TrackSort,
+    SearchResults, SourceItem, StreamStatus, Track, TrackId, TrackSort,
 };
 use musify_library::{Library, LibraryWatcher};
-use musify_ui::Backend;
+use musify_radio::{RadioBrowser, RadioStore, SearchQuery};
+use musify_ui::{Backend, RadioQuery};
 use serde::{Deserialize, Serialize};
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
@@ -47,8 +48,10 @@ pub struct AppBackend {
     state_path: PathBuf,
     config: Arc<Mutex<Config>>,
     library: Arc<Library>,
+    radio: Arc<RadioBrowser>,
     audio: Mutex<Option<AudioEngine>>,
     events: Mutex<Receiver<Event>>,
+    events_tx: Sender<Event>,
     waker: Arc<Mutex<Option<Waker>>>,
     scan: ScanCoordinator,
     watcher: Mutex<Option<LibraryWatcher>>,
@@ -64,6 +67,8 @@ struct SmtcSnapshot {
     duration: Option<Duration>,
     current: Option<musify_core::QueueItem>,
     metadata_track: Option<TrackId>,
+    stream_title: Option<String>,
+    stream_status: Option<StreamStatus>,
     last_sync: Option<Instant>,
 }
 
@@ -89,6 +94,8 @@ impl AppBackend {
             data_dir.join("library.sqlite3"),
             data_dir.join("covers"),
         )?);
+        let radio_store = Arc::new(RadioStore::open(&data_dir.join("radio.sqlite3"))?);
+        let radio = Arc::new(RadioBrowser::new(radio_store));
         let (event_tx, event_rx) = unbounded();
         let waker = Arc::new(Mutex::new(None::<Waker>));
         let config = Arc::new(Mutex::new(config));
@@ -143,8 +150,10 @@ impl AppBackend {
             state_path,
             config,
             library,
+            radio,
             audio: Mutex::new(audio),
             events: Mutex::new(event_rx),
+            events_tx: event_tx,
             waker,
             scan,
             watcher: Mutex::new(None),
@@ -160,6 +169,17 @@ impl AppBackend {
             backend.send_audio(Command::SetRepeat(repeat));
         }
         backend.restore_state();
+        if let Ok(url) = std::env::var("MUSIFY_AUTOPLAY_RADIO")
+            && !url.trim().is_empty()
+        {
+            let station = musify_radio::Station {
+                id: "autoplay-radio".into(),
+                name: "Radio test".into(),
+                url_resolved: url,
+                ..musify_radio::Station::default()
+            };
+            backend.send_audio(Command::PlayTrack(Box::new(station.to_track())));
+        }
         if std::env::var("MUSIFY_AUTOPLAY").as_deref() == Ok("1")
             && let Ok(tracks) = backend.library.tracks_sorted(
                 TrackSort::Title,
@@ -304,20 +324,36 @@ impl AppBackend {
             return;
         };
         let snapshot = audio.snapshot();
-        let queue: Vec<String> = snapshot
-            .queue
-            .iter()
-            .map(|item| item.track.path.to_string_lossy().into_owned())
-            .collect();
-        let current_index = snapshot
+        // Live streams are deliberately not persisted. Local items keep their
+        // order; the current index is remapped to the local-only queue.
+        let mut queue = Vec::new();
+        let mut current_index = 0;
+        for item in &snapshot.queue {
+            if !item.track.is_local() {
+                continue;
+            }
+            if snapshot
+                .current
+                .as_ref()
+                .is_some_and(|current| current.id == item.id)
+            {
+                current_index = queue.len();
+            }
+            queue.push(item.track.path.to_string_lossy().into_owned());
+        }
+        let position = if snapshot
             .current
             .as_ref()
-            .and_then(|current| snapshot.queue.iter().position(|item| item.id == current.id))
-            .unwrap_or(0);
+            .is_some_and(|current| current.track.is_local())
+        {
+            snapshot.position
+        } else {
+            Duration::ZERO
+        };
         let saved = SavedState {
             queue,
             current_index,
-            position_ms: u64::try_from(snapshot.position.as_millis()).unwrap_or(u64::MAX),
+            position_ms: u64::try_from(position.as_millis()).unwrap_or(u64::MAX),
         };
         let write = || -> anyhow::Result<()> {
             let json = serde_json::to_vec_pretty(&saved)?;
@@ -343,13 +379,25 @@ impl AppBackend {
                     snapshot.duration =
                         (!item.track.duration.is_zero()).then_some(item.track.duration);
                     snapshot.position = Duration::ZERO;
+                    snapshot.stream_title = None;
+                    snapshot.stream_status = None;
                     force_metadata = true;
                     force_sync = true;
                 }
                 Event::TrackChanged(None) => {
                     snapshot.current = None;
                     snapshot.duration = None;
+                    snapshot.stream_title = None;
+                    snapshot.stream_status = None;
                     force_metadata = true;
+                    force_sync = true;
+                }
+                Event::StreamTitleChanged(title) => {
+                    snapshot.stream_title.clone_from(title);
+                    force_metadata = true;
+                }
+                Event::StreamStatusChanged(status) => {
+                    snapshot.stream_status = Some(status.clone());
                     force_sync = true;
                 }
                 Event::PlaybackStateChanged(state) => {
@@ -403,8 +451,12 @@ impl AppBackend {
                     .cover_path
                     .as_ref()
                     .map(|path| format!("file://{}", path.display()));
+                let title = snapshot
+                    .stream_title
+                    .as_deref()
+                    .unwrap_or(item.track.title.as_str());
                 let metadata = MediaMetadata {
-                    title: Some(item.track.title.as_str()),
+                    title: Some(title),
                     artist: Some(item.track.artist.as_str()),
                     album: Some(item.track.album.as_str()),
                     cover_url: cover_url.as_deref(),
@@ -632,6 +684,72 @@ impl Backend for AppBackend {
 
     fn rescan(&self) {
         self.scan.start();
+    }
+
+    fn radio_search(&self, query: RadioQuery) {
+        let browser = Arc::clone(&self.radio);
+        let events = self.events_tx.clone();
+        let waker = Arc::clone(&self.waker);
+        let _ = thread::Builder::new()
+            .name("musify-radio-search".into())
+            .spawn(move || {
+                let query = SearchQuery {
+                    name: query.name,
+                    country: query.country,
+                    tag: query.tag,
+                };
+                let event = match browser.search(&query, 100) {
+                    Ok(outcome) => Event::SourceResults {
+                        source: "radio".into(),
+                        items: outcome.items,
+                        offline: outcome.offline,
+                    },
+                    Err(error) => Event::SourceSearchFailed {
+                        source: "radio".into(),
+                        message: error.to_string(),
+                    },
+                };
+                let _ = events.send(event);
+                wake(&waker);
+            });
+    }
+
+    fn radio_favorites(&self) -> Result<Vec<SourceItem>, String> {
+        self.radio.favorites().map_err(|error| error.to_string())
+    }
+
+    fn radio_toggle_favorite(&self, id: &str) -> Result<bool, String> {
+        let station = self
+            .radio
+            .station(id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "radio station not found in the cache".to_string())?;
+        self.radio
+            .toggle_favorite(&station)
+            .map_err(|error| error.to_string())
+    }
+
+    fn radio_play(&self, id: &str) {
+        match self.radio.station(id) {
+            Ok(Some(station)) => {
+                let track = station.to_track();
+                self.send_audio(Command::PlayTrack(Box::new(track)));
+            }
+            Ok(None) => {
+                let _ = self.events_tx.send(Event::Error {
+                    context: "radio".into(),
+                    message: "radio station not found in the cache".into(),
+                });
+                wake(&self.waker);
+            }
+            Err(error) => {
+                let _ = self.events_tx.send(Event::Error {
+                    context: "radio".into(),
+                    message: error.to_string(),
+                });
+                wake(&self.waker);
+            }
+        }
     }
 
     fn playback_settings(&self) -> (u16, bool, RepeatMode) {

@@ -92,7 +92,24 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 | Cercare di riprodurre un brano a 44,1 kHz su un dispositivo a 48 kHz | L'audio è continuo; con `MUSIFY_LINEAR_RESAMPLER=1` il comportamento resta valido. |
 | Mettere in pausa e riprendere più volte | La posizione non salta e non ci sono underrun nei log. |
 
-## 6. Riposo
+## 6. Radio internet (M5)
+
+| Passo | Risultato atteso |
+| --- | --- |
+| Aprire Fonti → Radio | La vista mostra i preferiti salvati e i campi Nome/Paese/Genere-tag. |
+| Cercare `jazz` | Arrivano stazioni; durante la ricerca compare lo stato di caricamento. |
+| Salvare una stazione nei preferiti e riavviare | La stazione resta nei preferiti; la cache è in `radio.sqlite3`. |
+| Avviare una stazione MP3 | La barra mostra `Connessione…`, poi `Buffering…`, poi `In riproduzione`; si sente l'audio. |
+| Attendere il metadata ICY | Il titolo nella barra e nell'overlay SMTC cambia con il brano corrente. |
+| Premere Pausa/Riprendi durante la radio | L'audio si ferma e riprende; lo stato dello stream resta coerente. |
+| Disconnettere la rete per 10–20 s | Compare `Riconnessione…`; al ritorno della rete la stazione riprende. |
+| Lasciare la rete disconnessa | Dopo alcuni tentativi compare `Offline`; la UI non si blocca e i comandi rispondono. |
+| Chiudere Musify mentre la radio suona e riaprire | Nessuno stream viene riprodotto automaticamente e nessun URL radio viene salvato in `state.json`. |
+| Cercare con la rete assente | Se esistono risultati in cache, compaiono con l'avviso `Offline: mostro i risultati salvati`. |
+| Controllare il Task Manager a radio ferma | Il runtime Tokio del thread stream non resta attivo. |
+| Provare una stazione HLS | Deve fallire con un errore chiaro, non bloccare la UI. |
+
+## 7. Riposo
 
 | Passo | Risultato atteso |
 | --- | --- |

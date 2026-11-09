@@ -22,6 +22,7 @@ pub fn view(s: &UiState) -> El {
         .px(12.0)
         .pb(14.0);
 
+    let sources = nav_button(s, View::Sources, i18n::NAV_SOURCES);
     let tracks = nav_button(s, View::Tracks, i18n::NAV_TRACKS);
     let albums = nav_button(s, View::Albums, i18n::NAV_ALBUMS);
     let artists = nav_button(s, View::Artists, i18n::NAV_ARTISTS);
@@ -84,6 +85,8 @@ pub fn view(s: &UiState) -> El {
         .gap(2.0)
         .child(logo)
         .child(tagline)
+        .child(common::section_label(i18n::NAV_SOURCES))
+        .child(sources)
         .child(common::section_label(i18n::NAV_LIBRARY))
         .child(tracks)
         .child(albums)
@@ -108,6 +111,7 @@ fn nav_button(s: &UiState, view: View, label: &'static str) -> El {
                 View::Albums => s.stats.albums.to_string(),
                 View::Artists => s.stats.artists.to_string(),
                 View::Queue => s.queue.len().to_string(),
+                View::Sources | View::Radio => String::new(),
                 View::Settings => String::new(),
             })
             .font(theme::TINY)

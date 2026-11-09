@@ -11,7 +11,31 @@ pub const NAV_TRACKS: &str = "Brani";
 pub const NAV_ALBUMS: &str = "Album";
 pub const NAV_ARTISTS: &str = "Artisti";
 pub const NAV_QUEUE: &str = "Coda";
+pub const NAV_SOURCES: &str = "Fonti";
 pub const NAV_SETTINGS: &str = "Impostazioni";
+pub const NAV_LOCAL: &str = "Locale";
+pub const NAV_RADIO: &str = "Radio";
+
+pub const SOURCE_LOCAL: &str = "Locale";
+pub const SOURCE_RADIO: &str = "Radio";
+pub const SOURCES_TITLE: &str = "Fonti";
+pub const SOURCES_HINT: &str = "Scegli da dove viene la musica.";
+pub const SOURCE_OPEN: &str = "Apri";
+pub const SOURCES_RADIO_CAPTION: &str = "Radio Browser · preferiti offline";
+pub const RADIO_TITLE: &str = "Radio internet";
+pub const RADIO_HINT: &str = "Cerca stazioni con Radio Browser. I preferiti restano sul computer e funzionano anche offline.";
+pub const RADIO_NAME: &str = "Nome";
+pub const RADIO_COUNTRY: &str = "Paese";
+pub const RADIO_TAG: &str = "Genere / tag";
+pub const RADIO_SEARCH: &str = "Cerca";
+pub const RADIO_FAVORITES: &str = "Preferiti";
+pub const RADIO_EMPTY: &str = "Nessuna stazione trovata";
+pub const RADIO_EMPTY_HINT: &str = "Prova un altro nome, paese o tag, oppure salva un preferito.";
+pub const RADIO_LOADING: &str = "Ricerca stazioni…";
+pub const RADIO_OFFLINE: &str = "Offline: mostro i risultati salvati";
+pub const RADIO_ADD_FAVORITE: &str = "☆";
+pub const RADIO_REMOVE_FAVORITE: &str = "★";
+pub const RADIO_PLAY: &str = "Ascolta";
 
 pub const SEARCH_PLACEHOLDER: &str = "Cerca brani, album, artisti";
 pub const SEARCH_EMPTY: &str = "Nessun risultato";
@@ -166,6 +190,29 @@ pub fn repeat_label(repeat: RepeatMode) -> &'static str {
         RepeatMode::Off => "Repeat off",
         RepeatMode::All => "Repeat all",
         RepeatMode::One => "Repeat one",
+    }
+}
+
+pub fn source_label(scheme: &str) -> &'static str {
+    match scheme {
+        "local" => SOURCE_LOCAL,
+        "radio" => SOURCE_RADIO,
+        _ => "Sorgente",
+    }
+}
+
+pub fn stream_status_label(status: &musify_core::StreamStatus) -> String {
+    use musify_core::StreamStatus;
+    match status {
+        StreamStatus::Idle => String::new(),
+        StreamStatus::Connecting => "Connessione…".into(),
+        StreamStatus::Buffering => "Buffering…".into(),
+        StreamStatus::Playing => NOW_PLAYING.into(),
+        StreamStatus::Reconnecting { attempt } => {
+            format!("Riconnessione… ({attempt})")
+        }
+        StreamStatus::Offline => "Offline".into(),
+        StreamStatus::Error(message) => format!("Errore stream: {message}"),
     }
 }
 

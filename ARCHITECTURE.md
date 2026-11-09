@@ -10,8 +10,9 @@ solo con comandi ed eventi.
 | `musify-core` | tipi di dominio, `Command`, `Event`, trait `PlaybackSource` e `LibraryProvider` | no |
 | `musify-audio` | decodifica (symphonia), output (cpal/WASAPI), coda, seek, volume | no |
 | `musify-library` | scanner (walkdir + lofty), indice SQLite, ricerca, cache copertine | no |
+| `musify-radio` | client Radio Browser, cache e preferiti SQLite | no |
 | `musify-ui` | viste e input Rune; traduce gesti in `Command` e applica `Event` | sì |
-| `musify-spotify` | seconda `PlaybackSource` via librespot/rspotify (M5) | no |
+| `musify-spotify` | seconda `PlaybackSource` via librespot/rspotify (predisposta) | no |
 | `musify-app` | config, logging, cablaggio dei canali, ciclo di vita | no |
 
 ## Flusso comandi/eventi
@@ -134,6 +135,35 @@ UI (Rune, thread principale)
 - La coda invalida l'audio già decodificato a ogni modifica rilevante; i test
   usano un callback finto che riconosce gli epoch di flush.
 
+## Fonti online e radio (M5)
+
+```text
+UI Fonti/Radio
+  ├─ Backend.radio_search ──▶ musify-radio ──▶ Radio Browser (HTTPS)
+  └─ Backend.radio_play ────▶ Command::PlayTrack (Track.source = radio://url)
+                                      │
+                              audio engine
+                                      │
+                        HttpStream (reqwest/rustls, thread + Tokio)
+                                      │  buffer adattivo + parser ICY
+                                      ▼
+                        symphonia → resampler → ring buffer
+```
+
+- `SourceId` è l'unico dato di provenienza nel core; `Track.source` vale
+  `local://path` per la libreria e `radio://url` per gli stream. Nessun tipo di
+  una fonte specifica attraversa il core.
+- `musify-radio` non conosce l'audio: cerca stazioni, le converte in
+  `SourceItem`/`Track` e salva cache e preferiti in `radio.sqlite3`. Ogni
+  richiesta crea e distrugge il proprio runtime Tokio.
+- Lo stream HTTP vive in `musify-audio`: thread dedicato, runtime Tokio
+  `current_thread` solo per la durata dello stream, buffer 128 KiB→1 MiB,
+  timeout, backoff e riconnessione. Il parser ICY toglie i metadata dal flusso e
+  pubblica `StreamTitle`.
+- La UI mostra il titolo ICY e lo stato dello stream; lo stesso titolo va a
+  SMTC. La coda radio non viene salvata in `state.json` (solo i brani locali).
+- HLS non è implementato. Il seek è ignorato per gli stream.
+
 ## Libreria locale (M2)
 
 ```text
@@ -181,6 +211,9 @@ cartelle musicali
   udibile, riallinea il cursore e riapre il brano dopo il flush.
 - **M4.5**: nessun target di RAM/avvio forzato; si tengono solo le modifiche con
   un guadagno misurato e si riportano anche quelle fallite (lazy load).
+- **M5**: il core trasporta `SourceId`, non flussi o client HTTP. La radio
+  preferisce stream progressivi MP3/AAC/Ogg e non HLS; Tokio non esiste finché
+  non si apre una fonte online. I flussi non vengono mai scritti su disco.
 
 ## Diagrammi di dettaglio
 

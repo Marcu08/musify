@@ -198,6 +198,7 @@ fn track(id: i64, path: PathBuf) -> Track {
         .to_string();
     Track {
         id: TrackId::new(id),
+        source: musify_core::SourceId::local(&path),
         path,
         title,
         artist: String::new(),

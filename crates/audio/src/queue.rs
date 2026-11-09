@@ -270,6 +270,7 @@ mod tests {
             id: QueueItemId::new(id),
             track: Track {
                 id: TrackId::new(id as i64),
+                source: musify_core::SourceId::local(format!("track-{id}.mp3")),
                 path: PathBuf::from(format!("track-{id}.mp3")),
                 title: format!("Track {id}"),
                 artist: "Artist".into(),

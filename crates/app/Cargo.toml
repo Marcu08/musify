@@ -13,6 +13,7 @@ spotify = ["dep:musify-spotify"]
 musify-core.workspace = true
 musify-audio.workspace = true
 musify-library.workspace = true
+musify-radio.workspace = true
 musify-ui.workspace = true
 musify-spotify = { workspace = true, optional = true }
 anyhow.workspace = true

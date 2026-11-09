@@ -3,8 +3,15 @@ use std::sync::Arc;
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, RepeatMode, SearchResults,
-    Track, TrackSort,
+    SourceItem, Track, TrackSort,
 };
+
+#[derive(Debug, Clone, Default)]
+pub struct RadioQuery {
+    pub name: String,
+    pub country: String,
+    pub tag: String,
+}
 
 /// Everything the Rune layer needs from the application. The UI never sees cpal,
 /// SQLite, Rune-side backend types or filesystem scanning internals.
@@ -25,6 +32,15 @@ pub trait Backend: Send + Sync {
     fn add_folder(&self, path: PathBuf);
     fn remove_folder(&self, path: &Path);
     fn rescan(&self);
+
+    fn radio_search(&self, _query: RadioQuery) {}
+    fn radio_favorites(&self) -> Result<Vec<SourceItem>, String> {
+        Ok(Vec::new())
+    }
+    fn radio_toggle_favorite(&self, _id: &str) -> Result<bool, String> {
+        Err("radio is not available".into())
+    }
+    fn radio_play(&self, _id: &str) {}
 
     fn playback_settings(&self) -> (u16, bool, RepeatMode);
     fn output_info(&self) -> (u32, u16);

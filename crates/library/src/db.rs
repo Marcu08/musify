@@ -414,9 +414,11 @@ fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
     let disc_number: Option<i64> = row.get("disc_number")?;
     let year: Option<i64> = row.get("year")?;
     let cover: Option<String> = row.get("cover_path")?;
+    let path = PathBuf::from(row.get::<_, String>("path")?);
     Ok(Track {
         id: TrackId::new(row.get("id")?),
-        path: PathBuf::from(row.get::<_, String>("path")?),
+        source: musify_core::SourceId::local(&path),
+        path,
         title: row.get("title")?,
         artist: row.get("artist")?,
         album: row.get("album")?,
@@ -574,6 +576,7 @@ mod tests {
     fn sample_track(path: &str) -> Track {
         Track {
             id: TrackId::new(1),
+            source: musify_core::SourceId::local(path),
             path: PathBuf::from(path),
             title: "Song".into(),
             artist: "Artist".into(),

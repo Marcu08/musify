@@ -56,6 +56,7 @@ mod tests {
 
         let track = crate::Track {
             id: TrackId::new(1),
+            source: crate::SourceId::local("song.mp3"),
             path: PathBuf::from("song.mp3"),
             title: "Song".into(),
             artist: String::new(),
@@ -73,6 +74,7 @@ mod tests {
             Command::Enqueue(vec![track]),
             Command::Enqueue(vec![crate::Track {
                 id: TrackId::new(1),
+                source: crate::SourceId::local("song.mp3"),
                 path: PathBuf::from("song.mp3"),
                 title: "Song".into(),
                 artist: String::new(),

@@ -1,14 +1,71 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{AlbumId, ArtistId, PlaylistId, QueueItemId, TrackId};
 
-/// A playable track. `path` is the canonical absolute path on disk.
+/// Identifies where a queue item comes from.
+///
+/// `local` items are files opened by path; any other scheme is an opaque URI
+/// that a source can open (for example `radio://https://stream.example/mp3`).
+/// The core only carries the identifier: it never interprets the URI.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SourceId {
+    scheme: String,
+    uri: String,
+}
+
+impl SourceId {
+    #[must_use]
+    pub fn new(scheme: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            scheme: scheme.into(),
+            uri: uri.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn local(path: impl AsRef<Path>) -> Self {
+        Self::new("local", path.as_ref().to_string_lossy())
+    }
+
+    #[must_use]
+    pub fn radio(url: impl Into<String>) -> Self {
+        Self::new("radio", url)
+    }
+
+    #[must_use]
+    pub fn scheme(&self) -> &str {
+        &self.scheme
+    }
+
+    #[must_use]
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.scheme == "local"
+    }
+}
+
+impl Default for SourceId {
+    /// Local with an empty URI, so an old serialized track without a source
+    /// still deserializes. New local tracks always set the real path.
+    fn default() -> Self {
+        Self::new("local", "")
+    }
+}
+
+/// A playable track. `path` is the canonical absolute path on disk for local
+/// items; streamed items keep their URL in `source.uri()`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
+    #[serde(default)]
+    pub source: SourceId,
     pub path: PathBuf,
     pub title: String,
     pub artist: String,
@@ -22,6 +79,26 @@ pub struct Track {
     pub cover_path: Option<PathBuf>,
     /// Unix timestamp (seconds) of the first scan that saw this file.
     pub added_at: i64,
+}
+
+impl Track {
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        self.source.is_local()
+    }
+}
+
+/// A result from an online source (radio, a remote library, ...) shown by the
+/// UI before it becomes a queue item. The core does not interpret `uri`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceItem {
+    pub id: String,
+    pub source: SourceId,
+    pub title: String,
+    pub subtitle: String,
+    pub detail: String,
+    pub uri: String,
+    pub favorite: bool,
 }
 
 /// An album row for the album grid.
@@ -119,6 +196,7 @@ mod tests {
     fn track() -> Track {
         Track {
             id: TrackId::new(1),
+            source: SourceId::local(r"C:\Music\artist\album\01 - song.flac"),
             path: PathBuf::from(r"C:\Music\artist\album\01 - song.flac"),
             title: "Song".into(),
             artist: "Artist".into(),
@@ -140,6 +218,38 @@ mod tests {
         let json = serde_json::to_string(&original).expect("serialize track");
         let decoded: Track = serde_json::from_str(&json).expect("deserialize track");
         assert_eq!(original, decoded);
+    }
+
+    #[test]
+    fn source_ids_distinguish_local_files_from_streams() {
+        let local = SourceId::local(r"C:\Music\song.flac");
+        assert!(local.is_local());
+        assert_eq!(local.uri(), r"C:\Music\song.flac");
+        let radio = SourceId::radio("https://stream.example/live.mp3");
+        assert!(!radio.is_local());
+        assert_eq!(radio.scheme(), "radio");
+        assert_eq!(radio.uri(), "https://stream.example/live.mp3");
+    }
+
+    #[test]
+    fn old_track_json_without_a_source_is_local() {
+        let json = r#"{
+            "id": 1,
+            "path": "C:\\Music\\song.flac",
+            "title": "Song",
+            "artist": "Artist",
+            "album": "Album",
+            "album_artist": null,
+            "track_number": null,
+            "disc_number": null,
+            "duration": {"secs": 1, "nanos": 0},
+            "year": null,
+            "genre": null,
+            "cover_path": null,
+            "added_at": 0
+        }"#;
+        let track: Track = serde_json::from_str(json).expect("deserialize old track");
+        assert!(track.is_local());
     }
 
     #[test]

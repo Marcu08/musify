@@ -3,9 +3,32 @@ use std::time::Duration;
 
 use crate::{PlaybackState, QueueItem, RepeatMode};
 
+/// Connection state of the current online stream. It is separate from
+/// `PlaybackState`: the player can be "playing" while a stream reconnects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamStatus {
+    Idle,
+    Connecting,
+    Buffering,
+    Playing,
+    Reconnecting { attempt: u32 },
+    Offline,
+    Error(String),
+}
+
+/// ICY metadata and connection state updates for the current stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamEvent {
+    Status(StreamStatus),
+    Title(Option<String>),
+}
+
 /// Events travel from the application controller to the UI.
 ///
 /// Events are deliberately plain data: the UI never receives a backend handle.
+/// `TrackChanged` carries the whole queue item; boxing it would only move the
+/// allocation to every producer for a channel that is not hot.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     PlaybackStateChanged(PlaybackState),
@@ -18,6 +41,17 @@ pub enum Event {
     VolumeChanged(u16),
     ShuffleChanged(bool),
     RepeatChanged(RepeatMode),
+    StreamStatusChanged(StreamStatus),
+    StreamTitleChanged(Option<String>),
+    SourceResults {
+        source: String,
+        items: Vec<crate::SourceItem>,
+        offline: bool,
+    },
+    SourceSearchFailed {
+        source: String,
+        message: String,
+    },
     ScanStarted {
         folders: usize,
     },

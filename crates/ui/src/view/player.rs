@@ -10,14 +10,37 @@ const VOLUME_W: f32 = 90.0;
 
 pub fn view(s: &UiState) -> El {
     let p = palette();
+    let radio = s
+        .current
+        .as_ref()
+        .is_some_and(|item| !item.track.is_local());
     let current_title = s.current.as_ref().map_or_else(
         || i18n::NO_TRACK.to_string(),
-        |item| common::unknown_title(&item.track.title),
+        |item| {
+            if radio {
+                s.stream_title
+                    .clone()
+                    .unwrap_or_else(|| common::unknown_title(&item.track.title))
+            } else {
+                common::unknown_title(&item.track.title)
+            }
+        },
     );
     let current_artist = s.current.as_ref().map_or_else(
         || i18n::NO_TRACK_HINT.to_string(),
-        |item| common::unknown_artist(&item.track.artist),
+        |item| {
+            if radio {
+                item.track.title.clone()
+            } else {
+                common::unknown_artist(&item.track.artist)
+            }
+        },
     );
+    let status_label = if radio {
+        i18n::stream_status_label(&s.stream_status)
+    } else {
+        i18n::state_label(s.playback).to_string()
+    };
     let cover = common::cover(
         s,
         s.current
@@ -44,9 +67,19 @@ pub fn view(s: &UiState) -> El {
                 .color(p.text_secondary),
             )
             .child(
-                text(i18n::state_label(s.playback))
-                    .font(theme::TINY)
-                    .color(p.accent),
+                row()
+                    .gap(6.0)
+                    .center_y()
+                    .child(text(status_label).font(theme::TINY).color(p.accent))
+                    .child(
+                        text(i18n::source_label(
+                            s.current
+                                .as_ref()
+                                .map_or("local", |item| item.track.source.scheme()),
+                        ))
+                        .font(theme::TINY)
+                        .color(p.text_secondary),
+                    ),
             ),
     );
 
@@ -112,10 +145,14 @@ pub fn view(s: &UiState) -> El {
                     ),
             )
             .child(
-                text(i18n::duration_text(duration))
-                    .font(theme::TIME)
-                    .color(p.text_secondary)
-                    .w(44.0),
+                text(if radio {
+                    "LIVE".to_string()
+                } else {
+                    i18n::duration_text(duration)
+                })
+                .font(theme::TIME)
+                .color(p.text_secondary)
+                .w(44.0),
             ),
     );
 

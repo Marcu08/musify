@@ -4,9 +4,11 @@ mod common;
 mod content;
 mod player;
 mod queue;
+mod radio;
 mod search;
 mod settings;
 mod sidebar;
+mod sources;
 mod topbar;
 mod tracks;
 

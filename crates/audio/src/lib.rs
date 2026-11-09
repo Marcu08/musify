@@ -10,6 +10,7 @@ mod clock;
 mod decoder;
 mod engine;
 mod error;
+mod http_stream;
 mod output;
 mod queue;
 mod resample;

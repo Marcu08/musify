@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, QueueItem,
-    QueueItemId, RepeatMode, SearchResults, Track, TrackId, TrackSort,
+    QueueItemId, RepeatMode, SearchResults, SourceItem, StreamStatus, Track, TrackId, TrackSort,
 };
 use rune::{Image, ImageCache, Key, KeyEvent, TextEdit, Tx, Waker};
 
-use crate::backend::Backend;
+use crate::backend::{Backend, RadioQuery};
 use crate::i18n;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +19,16 @@ pub enum View {
     Albums,
     Artists,
     Queue,
+    Sources,
+    Radio,
     Settings,
+}
+
+#[derive(Debug, Default)]
+pub struct RadioSearchState {
+    pub name: TextEdit,
+    pub country: TextEdit,
+    pub tag: TextEdit,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +146,13 @@ pub struct UiState {
     pub output: (u32, u16),
     pub images: RefCell<CoverCache>,
     pub list_version: u64,
+    pub radio_query: RadioSearchState,
+    pub radio_items: Vec<SourceItem>,
+    pub radio_keys: Vec<String>,
+    pub radio_loading: bool,
+    pub radio_offline: bool,
+    pub stream_title: Option<String>,
+    pub stream_status: StreamStatus,
 }
 
 impl UiState {
@@ -174,6 +190,13 @@ impl UiState {
             output,
             images: RefCell::new(CoverCache::new()),
             list_version: 0,
+            radio_query: RadioSearchState::default(),
+            radio_items: Vec::new(),
+            radio_keys: Vec::new(),
+            radio_loading: false,
+            radio_offline: false,
+            stream_title: None,
+            stream_status: StreamStatus::Idle,
         };
         state.reload();
         state
@@ -280,6 +303,55 @@ impl UiState {
             self.filtered.clear();
             self.filtered_keys.clear();
         }
+        if view == View::Radio {
+            self.refresh_radio_favorites();
+        }
+    }
+
+    pub fn refresh_radio_favorites(&mut self) {
+        match self.backend.radio_favorites() {
+            Ok(items) => self.set_radio_items(items),
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn search_radio(&mut self) {
+        let query = RadioQuery {
+            name: self.radio_query.name.text.trim().to_string(),
+            country: self.radio_query.country.text.trim().to_string(),
+            tag: self.radio_query.tag.text.trim().to_string(),
+        };
+        if query.name.is_empty() && query.country.is_empty() && query.tag.is_empty() {
+            self.refresh_radio_favorites();
+            return;
+        }
+        self.radio_loading = true;
+        self.radio_offline = false;
+        self.backend.radio_search(query);
+    }
+
+    fn set_radio_items(&mut self, items: Vec<SourceItem>) {
+        self.radio_keys = items
+            .iter()
+            .map(|item| format!("radio-{}", item.id))
+            .collect();
+        self.radio_items = items;
+    }
+
+    pub fn toggle_radio_favorite(&mut self, id: &str) {
+        match self.backend.radio_toggle_favorite(id) {
+            Ok(favorite) => {
+                if let Some(item) = self.radio_items.iter_mut().find(|item| item.id == id) {
+                    item.favorite = favorite;
+                }
+                self.list_version = self.list_version.wrapping_add(1);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn play_radio(&mut self, id: &str) {
+        self.backend.radio_play(id);
     }
 
     pub fn open_album(&mut self, album_id: AlbumId) {
@@ -401,6 +473,13 @@ impl UiState {
     }
 
     pub fn seek_fraction(&mut self, fraction: f32) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|item| !item.track.is_local())
+        {
+            return;
+        }
         let duration = self
             .duration
             .or_else(|| self.current.as_ref().map(|item| item.track.duration))
@@ -414,6 +493,13 @@ impl UiState {
     }
 
     pub fn seek_relative(&mut self, seconds: f64) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|item| !item.track.is_local())
+        {
+            return;
+        }
         let duration = self
             .duration
             .or_else(|| self.current.as_ref().map(|item| item.track.duration));
@@ -518,12 +604,20 @@ impl UiState {
             Event::TrackChanged(Some(item)) => {
                 self.duration = (!item.track.duration.is_zero()).then_some(item.track.duration);
                 self.position = Duration::ZERO;
+                self.stream_title = None;
+                self.stream_status = if item.track.is_local() {
+                    StreamStatus::Idle
+                } else {
+                    StreamStatus::Connecting
+                };
                 self.current = Some(item);
                 true
             }
             Event::TrackChanged(None) => {
                 self.current = None;
                 self.duration = None;
+                self.stream_title = None;
+                self.stream_status = StreamStatus::Idle;
                 true
             }
             Event::PositionChanged { position, duration } => {
@@ -561,6 +655,42 @@ impl UiState {
                     return false;
                 }
                 self.repeat = repeat;
+                true
+            }
+            Event::StreamStatusChanged(status) => {
+                if self.stream_status == status {
+                    return false;
+                }
+                self.stream_status = status;
+                true
+            }
+            Event::StreamTitleChanged(title) => {
+                if self.stream_title == title {
+                    return false;
+                }
+                self.stream_title = title;
+                true
+            }
+            Event::SourceResults {
+                source,
+                items,
+                offline,
+            } => {
+                if source != "radio" {
+                    return false;
+                }
+                self.radio_loading = false;
+                self.radio_offline = offline;
+                self.set_radio_items(items);
+                self.list_version = self.list_version.wrapping_add(1);
+                true
+            }
+            Event::SourceSearchFailed { source, message } => {
+                if source != "radio" {
+                    return false;
+                }
+                self.radio_loading = false;
+                self.error = Some(message);
                 true
             }
             Event::ScanStarted { .. } => {
@@ -678,6 +808,8 @@ pub fn scenes() -> &'static [Scene] {
         ("search", scene_search),
         ("albums", scene_albums),
         ("artists", scene_artists),
+        ("sources", scene_sources),
+        ("radio", scene_radio),
     ]
 }
 
@@ -720,6 +852,65 @@ fn scene_queue(state: &mut UiState) {
 
 fn scene_settings(state: &mut UiState) {
     state.view = View::Settings;
+}
+
+fn scene_sources(state: &mut UiState) {
+    state.view = View::Sources;
+}
+
+fn scene_radio(state: &mut UiState) {
+    state.view = View::Radio;
+    state.radio_items = vec![
+        musify_core::SourceItem {
+            id: "demo-jazz".into(),
+            source: musify_core::SourceId::radio("https://stream.example/jazz"),
+            title: "Soft Jazz Radio".into(),
+            subtitle: "Italy · MP3 128 kbps".into(),
+            detail: "jazz, smooth, lounge".into(),
+            uri: "https://stream.example/jazz".into(),
+            favorite: true,
+        },
+        musify_core::SourceItem {
+            id: "demo-electro".into(),
+            source: musify_core::SourceId::radio("https://stream.example/electro"),
+            title: "Notturno Elettrico".into(),
+            subtitle: "Germany · AAC 96 kbps".into(),
+            detail: "electronic, house".into(),
+            uri: "https://stream.example/electro".into(),
+            favorite: false,
+        },
+    ];
+    state.radio_keys = state
+        .radio_items
+        .iter()
+        .map(|item| format!("radio-{}", item.id))
+        .collect();
+    state.stream_status = StreamStatus::Playing;
+    state.current = Some(QueueItem {
+        id: QueueItemId::new(1),
+        track: musify_radio_track(),
+    });
+    state.stream_title = Some("Demo Artist - Demo Song".into());
+    state.playback = PlaybackState::Playing;
+}
+
+fn musify_radio_track() -> Track {
+    Track {
+        id: TrackId::new(999),
+        source: musify_core::SourceId::radio("https://stream.example/jazz"),
+        path: PathBuf::new(),
+        title: "Soft Jazz Radio".into(),
+        artist: "Soft Jazz Radio".into(),
+        album: "Radio".into(),
+        album_artist: None,
+        track_number: None,
+        disc_number: None,
+        duration: Duration::ZERO,
+        year: None,
+        genre: None,
+        cover_path: None,
+        added_at: 0,
+    }
 }
 
 fn scene_search(state: &mut UiState) {

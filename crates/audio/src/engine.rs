@@ -5,7 +5,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
-use musify_core::{Command, Event, PlaybackState, QueueItem, QueueItemId, RepeatMode, Track};
+use musify_core::{
+    Command, Event, PlaybackState, QueueItem, QueueItemId, RepeatMode, StreamStatus, Track,
+};
 use rtrb::Producer;
 
 use crate::clock::AudioClock;
@@ -233,6 +235,7 @@ impl EngineThread {
                 self.check_end();
                 self.tick_position();
             }
+            self.drain_stream_updates();
             self.publish();
         }
         self.shutdown_engine();
@@ -390,8 +393,15 @@ impl EngineThread {
                 self.current_index = Some(index);
                 self.current_origin = self.decoded_frames;
                 self.seek_offset = Duration::ZERO;
+                let stream = !item.track.is_local();
                 self.decoder = Some(decoder);
                 self.emit(Event::TrackChanged(Some(item)));
+                self.emit(Event::StreamTitleChanged(None));
+                self.emit(Event::StreamStatusChanged(if stream {
+                    StreamStatus::Connecting
+                } else {
+                    StreamStatus::Idle
+                }));
                 self.emit_position();
                 true
             }
@@ -408,7 +418,11 @@ impl EngineThread {
     }
 
     fn open_track(&self, mut item: QueueItem) -> Result<(TrackDecoder, QueueItem), AudioError> {
-        let decoder = TrackDecoder::open(&item.track.path, self.info.sample_rate)?;
+        let decoder = if item.track.is_local() {
+            TrackDecoder::open(&item.track.path, self.info.sample_rate)?
+        } else {
+            TrackDecoder::open_stream(&item.track.source, self.info.sample_rate)?
+        };
         if item.track.duration.is_zero() {
             item.track.duration = decoder.duration().unwrap_or_default();
         }
@@ -547,6 +561,31 @@ impl EngineThread {
         self.emit_position();
     }
 
+    fn drain_stream_updates(&mut self) {
+        let is_stream = self
+            .current
+            .as_ref()
+            .is_some_and(|item| !item.track.is_local());
+        if !is_stream {
+            return;
+        }
+        let Some(decoder) = self.decoder.as_ref() else {
+            return;
+        };
+        for update in decoder.take_stream_updates() {
+            match update {
+                musify_core::StreamEvent::Status(status) => {
+                    tracing::info!(?status, "stato stream");
+                    self.emit(Event::StreamStatusChanged(status));
+                }
+                musify_core::StreamEvent::Title(title) => {
+                    tracing::info!(?title, "titolo stream");
+                    self.emit(Event::StreamTitleChanged(title));
+                }
+            }
+        }
+    }
+
     fn emit_position(&mut self) {
         let position = self.position();
         let duration = self
@@ -568,6 +607,14 @@ impl EngineThread {
 
     fn seek(&mut self, position: Duration) {
         if self.decoder.is_none() || self.current.is_none() {
+            return;
+        }
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|item| !item.track.is_local())
+        {
+            // Live streams have no timeline to seek.
             return;
         }
         let duration = self.current.as_ref().map(|item| item.track.duration);
@@ -938,6 +985,7 @@ mod tests {
     fn track(id: i64, path: &Path) -> Track {
         Track {
             id: TrackId::new(id),
+            source: musify_core::SourceId::local(path),
             path: path.to_path_buf(),
             title: format!("Track {id}"),
             artist: "Artist".into(),

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use rune::{App, AppSpec};
 
-pub use backend::Backend;
+pub use backend::{Backend, RadioQuery};
 
 const WINDOW_SIZE: (f32, f32) = (1120.0, 620.0);
 

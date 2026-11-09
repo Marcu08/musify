@@ -56,6 +56,7 @@ impl MockBackend {
             let title = names[index % names.len()];
             tracks.push(Track {
                 id: TrackId::new(index as i64 + 1),
+                source: musify_core::SourceId::local(format!("C:\\Music\\track-{index}.flac")),
                 path: PathBuf::from(format!("C:\\Music\\track-{index}.flac")),
                 title: format!("{title} {}", index + 1),
                 artist: artist.into(),
