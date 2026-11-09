@@ -157,8 +157,8 @@ questa macchina.
 | Resampler sinc 44,1 → 48 kHz | **1,25% di un core** (lineare: 0,31%), 0 underrun | < 2% |
 | Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
 | UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
-| UI in riproduzione | **8,27% di un core**, **0,69%** su 12 thread | < 2% |
-| Avvio app completa | **1,09 s** mediana (min 1,08, max 2,11) | < 300 ms |
+| UI in riproduzione | **7,17% di un core**, **0,60%** su 12 thread | < 2% |
+| Avvio app completa | **1,11 s** mediana (min 1,07, max 1,59) | < 300 ms |
 | RAM | **185 MB** working set a riposo, 187 MB in riproduzione | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e

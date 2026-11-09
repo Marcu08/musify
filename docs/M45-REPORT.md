@@ -63,7 +63,8 @@ Misura isolata con `audio-cli` su 15 s di un file 44,1 kHz verso 48 kHz:
 
 Il sinc costa circa 0,9 punti percentuali di un core in più, ma resta sotto il
 2% dell'audio engine da solo. Nell'app completa la differenza non è
-distinguibile dalla varianza della UI (8,42% baseline → 8,27% finale).
+distinguibile dalla varianza della UI (8,42% baseline → 7,17% finale, con la
+sessione LTO intermedia a 7,02%).
 
 Test automatici: lunghezza output coerente con il rapporto di campionamento,
 tono a 1 kHz senza discontinuità evidenti, reset pulito tra stream, più i test
@@ -120,22 +121,24 @@ resampler e comportamento a riposo.
 
 | Metrica | Baseline | Finale | Differenza |
 | --- | ---: | ---: | ---: |
-| Ready Rune (mediana) | 1.124 ms | 1.094 ms | −30 ms |
-| Processo → ready (mediana) | 1.147 ms | 1.111 ms | −36 ms |
-| Working set a riposo | 186,26 MB | 185,00 MB | −1,26 MB |
-| Private bytes a riposo | 170,31 MB | 170,27 MB | −0,04 MB |
-| CPU a riposo, un core | 0,31% | 0,00% | −0,31 pp |
-| Working set in riproduzione | 188,33 MB | 187,03 MB | −1,30 MB |
-| Private bytes in riproduzione | 170,84 MB | 171,13 MB | +0,29 MB |
-| CPU in riproduzione, un core | 8,42% | 8,27% | −0,15 pp |
-| CPU in riproduzione, 12 thread | 0,70% | 0,69% | −0,01 pp |
+| Ready Rune (mediana) | 1.124 ms | 1.108 ms | −16 ms |
+| Processo → ready (mediana) | 1.147 ms | 1.132 ms | −15 ms |
+| Working set a riposo | 186,26 MB | 184,97 MB | −1,29 MB |
+| Private bytes a riposo | 170,31 MB | 170,43 MB | +0,12 MB |
+| CPU a riposo, un core | 0,31% | 0,16% | −0,15 pp |
+| Working set in riproduzione | 188,33 MB | 187,02 MB | −1,31 MB |
+| Private bytes in riproduzione | 170,84 MB | 170,05 MB | −0,79 MB |
+| CPU in riproduzione, un core | 8,42% | 7,17% | −1,25 pp |
+| CPU in riproduzione, 12 thread | 0,70% | 0,60% | −0,10 pp |
 
-Intervalli finali: ready 1.078–2.112 ms; working set a riposo 181,58–185,13 MB;
-private bytes a riposo 166,85–171,49 MB; CPU in riproduzione 5,92–9,68% di un
+Intervalli finali: ready 1.068–1.593 ms; working set a riposo 181,70–185,11 MB;
+private bytes a riposo 164,94–171,65 MB; CPU in riproduzione 5,92–9,35% di un
 core. La varianza di avvio è dominata da Defender, cache shader e processi
-concorrenti: 30 ms di differenza non sono un risultato forte. Non c'è un
-peggioramento misurato, ma non si può affermare che LTO da solo abbia cambiato
-l'esperienza.
+concorrenti: la differenza di 16 ms non è un risultato forte. Anche il calo di
+CPU in riproduzione va letto con cautela: la baseline aveva una mediana di
+8,42% e la sessione LTO intermedia 7,02%; il finale è 7,17%. Non c'è un
+peggioramento misurato, ma non si può attribuire con certezza tutto il calo a
+LTO o al resampler.
 
 ## Target realistici
 
@@ -145,12 +148,12 @@ dati:
 
 | Metrica | Target realistico |
 | --- | --- |
-| Avvio mediano | ≤ 1,3 s (attuale 1,09 s) |
-| Avvio p95 | ≤ 2,2 s (attuale max 2,11 s) |
-| Working set a riposo | ≤ 190 MB (attuale 185 MB) |
-| Private bytes a riposo | ≤ 175 MB (attuale 170,3 MB) |
-| CPU a riposo | ≤ 0,5% di un core (attuale 0,00%) |
-| CPU in riproduzione | ≤ 10% di un core / ≤ 0,8% su 12 thread (attuale 8,27% / 0,69%) |
+| Avvio mediano | ≤ 1,3 s (attuale 1,11 s) |
+| Avvio p95 | ≤ 2,0 s (attuale max 1,59 s) |
+| Working set a riposo | ≤ 190 MB (attuale 185,0 MB) |
+| Private bytes a riposo | ≤ 175 MB (attuale 170,4 MB) |
+| CPU a riposo | ≤ 0,5% di un core (attuale 0,16%) |
+| CPU in riproduzione | ≤ 10% di un core / ≤ 0,8% su 12 thread (attuale 7,17% / 0,60%) |
 | Underrun | 0 (attuale 0) |
 
 ## Test e qualità
