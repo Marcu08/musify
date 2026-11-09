@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="musify-title musify-desc">
+  <title id="musify-title">Musify</title>
+  <desc id="musify-desc">Musify — player musicale locale per Windows</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F0F13"/>
+      <stop offset="1" stop-color="#18181F"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="84" y1="76" x2="238" y2="244" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC857"/>
+      <stop offset="0.55" stop-color="#FFA51F"/>
+      <stop offset="1" stop-color="#FF7718"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.13" cy="0.5" r="0.55">
+      <stop offset="0" stop-color="#FF9F1C" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#FF9F1C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core" cx="0.5" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#FFF8ED" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFF8ED" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="320" rx="28" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1198" height="318" rx="27" fill="none" stroke="#2B2B33" stroke-width="2"/>
+  <rect width="1200" height="320" rx="28" fill="url(#glow)"/>
+
+  <!-- App icon -->
+  <rect x="52" y="60" width="200" height="200" rx="52" fill="#1B1B22" stroke="#34343E" stroke-width="2"/>
+  <circle cx="152" cy="160" r="68" fill="url(#amber)"/>
+  <circle cx="152" cy="160" r="54" fill="none" stroke="#1B1B22" stroke-opacity="0.34" stroke-width="3"/>
+  <circle cx="152" cy="160" r="40" fill="none" stroke="#1B1B22" stroke-opacity="0.26" stroke-width="2"/>
+  <circle cx="152" cy="160" r="26" fill="url(#core)"/>
+  <path d="M142 132 L186 160 L142 188 Z" fill="#FFF8ED"/>
+
+  <!-- Wordmark -->
+  <text x="298" y="177" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="92" font-weight="800" letter-spacing="-4" fill="#F7F7F8">Musify<tspan fill="#FFB020">.</tspan></text>
+  <text x="302" y="222" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="19" font-weight="600" letter-spacing="4.2" fill="#8D8D99">LA TUA MUSICA, LOCALE</text>
+  <text x="302" y="260" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="4.6" fill="#5C5C68">RUST · WINDOWS · RUNE</text>
+
+  <!-- Soundwave accent -->
+  <g fill="#FFB020">
+    <rect x="852" y="144" width="6" height="32" rx="3" opacity="0.18"/>
+    <rect x="866" y="130" width="6" height="60" rx="3" opacity="0.24"/>
+    <rect x="880" y="115" width="6" height="90" rx="3" opacity="0.32"/>
+    <rect x="894" y="94" width="6" height="132" rx="3" opacity="0.42"/>
+    <rect x="908" y="122" width="6" height="76" rx="3" opacity="0.55"/>
+    <rect x="922" y="76" width="6" height="168" rx="3" opacity="0.42"/>
+    <rect x="936" y="108" width="6" height="104" rx="3" opacity="0.32"/>
+    <rect x="950" y="64" width="6" height="192" rx="3" opacity="0.55"/>
+    <rect x="964" y="96" width="6" height="128" rx="3" opacity="0.42"/>
+    <rect x="978" y="46" width="6" height="228" rx="3" opacity="0.55"/>
+    <rect x="992" y="96" width="6" height="128" rx="3" opacity="0.42"/>
+    <rect x="1006" y="64" width="6" height="192" rx="3" opacity="0.55"/>
+    <rect x="1020" y="108" width="6" height="104" rx="3" opacity="0.32"/>
+    <rect x="1034" y="76" width="6" height="168" rx="3" opacity="0.42"/>
+    <rect x="1048" y="122" width="6" height="76" rx="3" opacity="0.55"/>
+    <rect x="1062" y="94" width="6" height="132" rx="3" opacity="0.42"/>
+    <rect x="1076" y="115" width="6" height="90" rx="3" opacity="0.32"/>
+    <rect x="1090" y="130" width="6" height="60" rx="3" opacity="0.24"/>
+    <rect x="1104" y="144" width="6" height="32" rx="3" opacity="0.18"/>
+  </g>
+</svg>

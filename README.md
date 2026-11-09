@@ -1,37 +1,99 @@
-# Musify
+<p align="center">
+  <img src="assets/logo.png" alt="Musify" width="900">
+</p>
 
-Player musicale desktop personale per Windows, scritto in Rust. Interfaccia scura ispirata a
-Spotify, ma con identità propria; sorgente principale la musica locale, Spotify solo come
-milestone opzionale dietro feature flag.
+<p align="center">
+  <strong>Il tuo player musicale desktop per Windows.</strong><br>
+  Leggero, locale, veloce. Costruito in Rust con una UI GPU Rune.
+</p>
 
-## Stato
+<p align="center">
+  <a href="https://github.com/Marcu08/musify/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Marcu08/musify/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-1.99.1-000000?logo=rust&logoColor=white">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows&logoColor=white">
+  <img alt="Rune" src="https://img.shields.io/badge/UI-Rune-FFA51F">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-3DA639">
+</p>
 
-| Milestone | Stato |
+<p align="center">
+  <img src="docs/evidence/musify-tracks.png" alt="Musify in riproduzione" width="100%">
+</p>
+
+## Musify in breve
+
+Musify è un player musicale per Windows pensato per la **musica locale**:
+cartelle scelte da te, scansione incrementale, copertine, ricerca istantanea,
+coda, shuffle/repeat e una barra "in riproduzione" sempre pronta. Niente
+abbonamenti, niente catalogo cloud, niente rumore: solo i tuoi file.
+
+L'interfaccia è scura, con un accento ambra; il motore audio e la libreria sono
+completamente separati dalla UI. Rune è una dipendenza sperimentale, pinnata a
+un commit preciso e confinata al crate `musify-ui`.
+
+## Funzionalità
+
+- **Libreria locale**: cartelle musicali multiple, scansione incrementale,
+  metadati con `lofty`, rimozione automatica dei file spariti.
+- **Ricerca FTS5**: brani, album e artisti, con supporto agli accenti
+  (`citta` trova `Città`).
+- **Viste virtualizzate**: Brani, Album e Artisti costruiscono solo le righe
+  visibili; la UI resta fluida anche con librerie grandi.
+- **Riproduzione**: play/pausa, precedente/successivo, seek, volume,
+  shuffle, repeat, coda modificabile.
+- **Gapless**: i sample del brano successivo entrano nello stesso stream; il
+  cambio metadati segue il confine di frame. Nessun crossfade.
+- **Windows-native**: SMTC, overlay di Windows, tasti multimediali, dialog
+  nativo per scegliere le cartelle.
+- **Persistenza**: coda, brano corrente e posizione in `state.json`; cartelle,
+  volume, shuffle e repeat in `config.toml`.
+- **Scorciatoie**: Spazio, frecce, Ctrl+F, Ctrl+R, +/−, Esc, Ctrl+Q.
+- **Misure trasparenti**: i numeri reali sono riportati sotto, inclusi i target
+  che non sono stati raggiunti.
+
+## Screenshot
+
+| Brani | Coda |
 | --- | --- |
-| M0 — Workspace, CI locale, smoke test Rune | completata |
-| M1 — Motore audio | completata |
-| M2 — Libreria | completata |
-| M3 — UI Rune | completata |
-| M4 — Integrazione Windows e rifinitura | completata |
-| M5 — Spotify (opzionale) | non implementata |
+| ![Brani](docs/evidence/musify-tracks.png) | ![Coda](docs/evidence/musify-queue.png) |
 
-Report: `docs/M0-RUNE-REPORT.md`, `docs/M1-AUDIO-REPORT.md`,
-`docs/M2-LIBRARY-REPORT.md`, `docs/M3-UI-REPORT.md`,
-`docs/M4-WINDOWS-REPORT.md`.
+| Album | Artisti |
+| --- | --- |
+| ![Album](docs/evidence/musify-albums.png) | ![Artisti](docs/evidence/musify-artists.png) |
 
-## Requisiti (Windows)
+| Ricerca | Impostazioni |
+| --- | --- |
+| ![Ricerca](docs/evidence/musify-search.png) | ![Impostazioni](docs/evidence/musify-settings.png) |
+
+| Ripristino coda | Overlay Windows |
+| --- | --- |
+| ![Ripristino](docs/evidence/musify-restored.png) | ![SMTC](docs/evidence/musify-smtc.png) |
+
+## Requisiti
 
 - Windows 10/11 x86_64.
-- [rustup](https://rustup.rs/) con toolchain MSVC: il repository fissa Rust 1.99.1 in
-  `rust-toolchain.toml` (la stessa versione richiesta da Rune).
-- Visual Studio Build Tools con il workload "Desktop development with C++" (linker MSVC).
-- Driver GPU con supporto DirectX 12 (Rune usa wgpu).
-- Per rigenerare gli asset di test: `ffmpeg` nel `PATH`.
+- [rustup](https://rustup.rs/) con toolchain MSVC. Il repository fissa
+  **Rust 1.99.1** in `rust-toolchain.toml`, la stessa versione richiesta da Rune.
+- Visual Studio Build Tools con **Desktop development with C++**.
+- Driver GPU con DirectX 12 (Rune usa wgpu).
+- Facoltativo: `ffmpeg` nel `PATH` per rigenerare gli asset audio di test.
 
-## Compilare ed eseguire
+## Avvio rapido
 
 ```powershell
-cargo build
+git clone https://github.com/Marcu08/musify.git
+cd musify
+
+cargo build -p musify --release
+.\target\release\musify.exe
+```
+
+Al primo avvio apri **Impostazioni → Aggiungi cartella**, scegli la cartella
+della tua musica e lascia che la scansione parta. La libreria viene aggiornata
+automaticamente quando i file cambiano.
+
+Per lo sviluppo:
+
+```powershell
 cargo run -p musify
 ```
 
@@ -41,86 +103,142 @@ Controlli locali equivalenti alla CI:
 powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 ```
 
-## Interfaccia e uso
+## Scorciatoie
 
-1. Apri **Impostazioni** e premi **Aggiungi cartella**: scegli la cartella della
-   musica. La scansione parte subito; il watcher tiene la libreria aggiornata.
-2. Usa **Brani**, **Album**, **Artisti** e la ricerca in alto. La coda si apre
-   dalla sidebar o dal pulsante **Coda** nella barra di riproduzione.
-3. Clicca un brano per riprodurlo, **Riproduci tutto** per accodare la vista
-   corrente. Nella coda puoi spostare, rimuovere e svuotare i brani.
-4. Scorciatoie: Spazio play/pausa, ←/→ seek ±5 s, Ctrl+←/→ brano
-   precedente/successivo, Ctrl+F cerca, Ctrl+R riscansiona, +/− volume,
-   Esc chiude ricerca/filtro, Ctrl+Q esce.
+| Tasto | Azione |
+| --- | --- |
+| `Spazio` | Play / pausa |
+| `←` / `→` | Seek ±5 secondi |
+| `Ctrl+←` / `Ctrl+→` | Brano precedente / successivo |
+| `Ctrl+F` | Cerca |
+| `Ctrl+R` | Riscansiona la libreria |
+| `+` / `-` | Volume su / giù |
+| `Esc` | Chiude ricerca o filtro |
+| `Ctrl+Q` | Chiude Musify |
 
-Screenshot: `docs/evidence/musify-tracks.png`, `musify-queue.png`,
-`musify-settings.png`, `musify-search.png`, `musify-albums.png`,
-`musify-artists.png`, `musify-playing.png`.
-
-Misure reali e problemi noti sono in `docs/M3-UI-REPORT.md` e
-`docs/M4-WINDOWS-REPORT.md`: a riposo la CPU è 0,00%, l'avvio dell'app completa è
-~1,0–2,7 s (mediana ~1,5 s; 0,66 s la misura M3 più favorevole) e la RAM è
-~176 MB su questa macchina. I target indicativi di 300 ms e 80 MB non sono
-centrati e sono riportati senza arrotondamenti.
-
-## Tasti multimediali e persistenza
-
-- I tasti Play/Pause, Next, Previous, Stop e Seek sono collegati a Windows
-  tramite SMTC (souvlaki). L'overlay di Windows mostra titolo, artista e
-  copertina.
-- `state.json` salva coda, brano corrente e posizione. Alla riapertura la coda
-  viene ripristinata in pausa, senza avviare l'audio.
-- `config.toml` salva cartelle, volume, shuffle e repeat.
-- Ctrl+Q chiude e salva; la chiusura con la X della finestra passa dallo stesso
-  `Drop` del backend.
-
-## Motore audio da riga di comando
-
-```powershell
-cargo run -p musify-audio --bin audio-cli -- `
-  crates/audio/tests/assets/tone.mp3 `
-  crates/audio/tests/assets/tone.flac `
-  crates/audio/tests/assets/tone.ogg
-```
-
-Comandi da stdin: `pause`, `resume`, `toggle`, `next`, `prev`, `seek 12.5`,
-`vol 70`, `status`, `quit`. Gli asset di test si rigenerano con
-`scripts/make-test-assets.ps1` (richiede ffmpeg).
-
-## Libreria da riga di comando
-
-```powershell
-cargo run -p musify-library --bin library-cli -- scan C:\Musica
-cargo run -p musify-library --bin library-cli -- search "citta"
-cargo run -p musify-library --bin library-cli -- stats
-cargo run -p musify-library --bin library-cli -- bench C:\Musica
-```
-
-`bench` esegue una scansione a freddo e una incrementale e stampa i tempi.
-Su 10.000 file di prova: 8,51 s la prima, 0,98 s la seconda (release, dettagli in
-`docs/M2-LIBRARY-REPORT.md`).
-
-## Struttura
+## Architettura
 
 ```text
-crates/core      tipi di dominio, Command/Event, trait PlaybackSource e LibraryProvider
-crates/audio     decodifica e output audio, coda, seek, volume
-crates/library   scanner, SQLite, ricerca, cache copertine
-crates/ui        presentazione Rune, nessuna logica di dominio
-crates/spotify   sorgente Spotify opzionale (feature `spotify`)
-crates/app       binario, configurazione, cablaggio
+┌──────────────────────┐   Command    ┌────────────────────┐
+│      UI (Rune)       │ ───────────▶ │    AppBackend      │
+│  liste virtuali      │              │  coda, config,     │
+│  barra now-playing   │ ◀─────────── │  persistenza       │
+└──────────────────────┘    Event     └─────────┬──────────┘
+                                                │
+                    ┌───────────────────────────┼───────────────────────────┐
+                    ▼                           ▼                           ▼
+             ┌────────────┐             ┌────────────┐             ┌────────────┐
+             │ AudioEngine│             │  Library   │             │    SMTC    │
+             │ symphonia  │             │  SQLite    │             │  souvlaki  │
+             │ cpal/WASAPI│             │  FTS5      │             │  Windows   │
+             └────────────┘             └────────────┘             └────────────┘
 ```
+
+| Crate | Responsabilità |
+| --- | --- |
+| `musify-core` | tipi di dominio, `Command`/`Event`, trait `PlaybackSource` e `LibraryProvider` |
+| `musify-audio` | decodifica, output, coda, seek, volume, gapless |
+| `musify-library` | scanner incrementale, SQLite, ricerca, copertine, watcher |
+| `musify-ui` | presentazione Rune, nessuna logica di dominio |
+| `musify-spotify` | scheletro per la seconda sorgente (M5, opzionale) |
+| `musify-app` | binario, config, cablaggio, SMTC, persistenza |
+
+Dettagli completi in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Misure reali
+
+Release, Windows 11, Ryzen 5 5625U (6 core / 12 thread), 7,9 GB RAM,
+cache shader calda. Non sono numeri di laboratorio: sono le misure fatte su
+questa macchina.
+
+| Area | Risultato | Target indicativo |
+| --- | --- | --- |
+| Audio engine da solo | **0,93% di un core**, 15,9 MB, 0 underrun | < 2% |
+| Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
+| UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
+| UI in riproduzione | **7,2% di un core**, **0,60%** su 12 thread | < 2% |
+| Avvio app completa | **~1,0–2,7 s**, mediana ~1,5 s (best M3: 0,66 s) | < 300 ms |
+| RAM | **~176 MB** a riposo, ~182 MB in riproduzione | < 80 MB |
+
+I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
+l'inizializzazione GPU sono la parte dominante. La UI a riposo non ridisegna.
+Tutti i dettagli e i problemi noti sono nei report delle milestone.
+
+## Milestone
+
+| Milestone | Stato | Report |
+| --- | --- | --- |
+| M0 — Workspace e smoke test Rune | completata | [M0](docs/M0-RUNE-REPORT.md) |
+| M1 — Motore audio | completata | [M1](docs/M1-AUDIO-REPORT.md) |
+| M2 — Libreria | completata | [M2](docs/M2-LIBRARY-REPORT.md) |
+| M3 — UI Rune | completata | [M3](docs/M3-UI-REPORT.md) |
+| M4 — Windows, SMTC, persistenza | completata | [M4](docs/M4-WINDOWS-REPORT.md) |
+| M5 — Spotify (opzionale) | non implementata | — |
+
+## Sviluppo
+
+```powershell
+# Tutti i test del workspace
+cargo test --workspace --all-features
+
+# Solo il motore audio
+cargo test -p musify-audio
+
+# Solo la libreria
+cargo test -p musify-library
+
+# CLI di prova
+cargo run -p musify-audio --bin audio-cli -- .\crates\audio\tests\assets\tone.flac
+cargo run -p musify-library --bin library-cli -- scan .\crates\audio\tests\assets
+```
+
+Gli asset audio di test sono minuscoli e già nel repository. Per rigenerarli:
+`scripts/make-test-assets.ps1` (richiede ffmpeg).
+
+Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
+(separate da `;`), `MUSIFY_NO_AUDIO=1`, `MUSIFY_NO_SMTC=1`, `RUNE_READY_DIR`.
 
 ## Dati dell'applicazione
 
-- Configurazione: `%APPDATA%\Musify\config.toml`
-- Stato di riproduzione: `%APPDATA%\Musify\state.json`
-- Libreria: `%APPDATA%\Musify\library.sqlite3`
-- Cache copertine: `%APPDATA%\Musify\covers\`
+| File | Contenuto |
+| --- | --- |
+| `%APPDATA%\Musify\config.toml` | cartelle musicali, volume, shuffle, repeat |
+| `%APPDATA%\Musify\state.json` | coda, brano corrente, posizione |
+| `%APPDATA%\Musify\library.sqlite3` | indice della libreria |
+| `%APPDATA%\Musify\covers\` | cache copertine JPEG |
+
+## Limiti noti
+
+- I target di avvio (< 300 ms) e RAM (< 80 MB) non sono centrati su questa
+  macchina; i numeri reali sono sopra.
+- Su Windows a DPI 125% la prima finestra viene corretta al primo `on_ready`
+  per allineare viewport e finestra nativa.
+- Il resampling è lineare; la qualità è buona per l'uso quotidiano, ma non è
+  un resampler sinc.
+- Modificare la coda mentre un brano è già stato decodificato in anticipo è
+  best-effort: l'audio già nel ring buffer non viene rimosso.
+- Il dialogo nativo delle cartelle non è stato automatizzato nei test desktop;
+  la configurazione via TOML e variabili d'ambiente è verificata.
+- M5 Spotify non è implementata. Il crate è uno scheletro compilabile dietro
+  feature `spotify`.
 
 ## Note legali
 
-Musify è un progetto personale. Non aggira DRM, non registra e non distribuisce flussi
-Spotify. L'eventuale uso di `librespot` per riprodurre contenuti Spotify può non essere in
-linea con i termini di servizio di Spotify: valuta tu se usarlo sul tuo account Premium.
-Nessun token o segreto viene salvato nel repository o nei log.
+Musify è un progetto personale. Non aggira DRM, non registra e non distribuisce
+flussi Spotify. L'eventuale uso di `librespot` per riprodurre contenuti Spotify
+può non essere in linea con i termini di servizio di Spotify: valuta tu se
+usarlo sul tuo account Premium. Nessun token o segreto viene salvato nel
+repository o nei log.
+
+## Crediti
+
+Musify usa [Rune](https://github.com/anomalyco/rune) per la UI,
+[Symphonia](https://github.com/pdeljanov/Symphonia) per la decodifica,
+[cpal](https://github.com/RustAudio/cpal) per l'output,
+[rusqlite](https://github.com/rusqlite/rusqlite) per la libreria,
+[lofty](https://github.com/Serial-ATA/lofty-rs) per i metadati e
+[souvlaki](https://github.com/Sinono3/souvlaki) per SMTC.
+
+## Licenza
+
+MIT — vedi [LICENSE](LICENSE).
