@@ -120,27 +120,34 @@ stato stream status=Playing
 Nessun errore di rete; i due warning `invalid main_data_begin` di symphonia sono
 normali all'aggancio di uno stream MP3 e non interrompono la riproduzione.
 
+Soak di 5 minuti sulla stessa stazione: nessuna riconnessione, nessun errore,
+tre titoli ICY distinti ricevuti (`Roses`, `All of Me`, `All Night`).
+La finestra era in background, quindi Windows ha ridotto il working set a
+54,8 MB e la CPU campionata (1,56% di un core) non è confrontabile con le misure
+in primo piano della tabella. I private bytes sono rimasti 175,0 MB. Non è una
+prova di più ore: vedere i limiti.
+
 ### Misura RAM/CPU con e senza radio
 
-Stessa macchina, stessa build release (`fcf1eb8`), 10 avvii, finestra in primo
+Stessa macchina, stessa build release (`9688eae`), 10 avvii, finestra in primo
 piano, 5 s di campionamento CPU dopo 2 s di assestamento. La prova locale usa il
 brano FLAC M4.5; la prova radio usa MANGORADIO.
 
 | Metrica | Locale (M5) | Radio MANGORADIO | Differenza |
 | --- | ---: | ---: | ---: |
-| Working set | 187,47 MB | 194,74 MB | +7,27 MB |
-| Private bytes | 171,12 MB | 174,05 MB | +2,93 MB |
-| CPU un core | 7,80% | 6,87% | −0,93 pp |
-| CPU 12 thread | 0,65% | 0,57% | −0,08 pp |
+| Working set | 187,41 MB | 194,85 MB | +7,44 MB |
+| Private bytes | 171,50 MB | 174,30 MB | +2,80 MB |
+| CPU un core | 7,64% | 8,42% | +0,78 pp |
+| CPU 12 thread | 0,64% | 0,70% | +0,06 pp |
 | Underrun | 0 | 0 | — |
 
 Dettaglio e valori grezzi: [M5-LOCAL-MEASURE.md](M5-LOCAL-MEASURE.md) e
-[M5-RADIO-MEASURE.md](M5-RADIO-MEASURE.md) (radio: CPU 5,93–9,69% di un core).
-La radio costa circa 7 MB di working set e 3 MB di private bytes in più (TLS,
-buffer 128 KiB–1 MiB, decoding MP3); la CPU non mostra un aumento misurabile
-rispetto alla riproduzione locale, perché il costo è sotto la varianza dei redraw
-della UI. Il runtime Tokio non è attivo a riposo: l'avvio a riposo della build
-M5 resta 1,094 s, working set 185,31 MB, private 169,55 MB.
+[M5-RADIO-MEASURE.md](M5-RADIO-MEASURE.md) (radio: CPU 6,24–9,99% di un core;
+locale 6,23–9,35%). La radio costa circa 7,4 MB di working set e 2,8 MB di
+private bytes in più (TLS, buffer 128 KiB–1 MiB, decoding MP3) e circa 0,8 punti
+percentuali di un core in più; entrambe le misure restano sotto il 10% di un
+core. Il runtime Tokio non è attivo a riposo: l'avvio a riposo della build M5
+resta 1,091 s, working set 185,28 MB, private 170,55 MB, CPU 0,31%.
 
 ### Evidenze UI
 
