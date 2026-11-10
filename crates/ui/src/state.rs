@@ -6,11 +6,12 @@ use std::time::Duration;
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, QueueItem,
-    QueueItemId, RepeatMode, SearchResults, SourceItem, StreamStatus, Track, TrackId, TrackSort,
+    QueueItemId, RepeatMode, SearchResults, SourceItem, SourceQuery, StreamStatus, Track, TrackId,
+    TrackSort,
 };
 use rune::{Image, ImageCache, Key, KeyEvent, TextEdit, Tx, Waker};
 
-use crate::backend::{Backend, RadioQuery};
+use crate::backend::Backend;
 use crate::i18n;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,10 +148,10 @@ pub struct UiState {
     pub images: RefCell<CoverCache>,
     pub list_version: u64,
     pub radio_query: RadioSearchState,
-    pub radio_items: Vec<SourceItem>,
-    pub radio_keys: Vec<String>,
-    pub radio_loading: bool,
-    pub radio_offline: bool,
+    pub source_items: Vec<SourceItem>,
+    pub source_keys: Vec<String>,
+    pub source_loading: bool,
+    pub source_offline: bool,
     pub stream_title: Option<String>,
     pub stream_status: StreamStatus,
 }
@@ -191,10 +192,10 @@ impl UiState {
             images: RefCell::new(CoverCache::new()),
             list_version: 0,
             radio_query: RadioSearchState::default(),
-            radio_items: Vec::new(),
-            radio_keys: Vec::new(),
-            radio_loading: false,
-            radio_offline: false,
+            source_items: Vec::new(),
+            source_keys: Vec::new(),
+            source_loading: false,
+            source_offline: false,
             stream_title: None,
             stream_status: StreamStatus::Idle,
         };
@@ -304,44 +305,56 @@ impl UiState {
             self.filtered_keys.clear();
         }
         if view == View::Radio {
-            self.refresh_radio_favorites();
+            self.refresh_source_favorites("radio");
         }
     }
 
-    pub fn refresh_radio_favorites(&mut self) {
-        match self.backend.radio_favorites() {
-            Ok(items) => self.set_radio_items(items),
+    pub fn refresh_source_favorites(&mut self, source: &str) {
+        match self.backend.source_favorites(source) {
+            Ok(items) => self.set_source_items(items),
             Err(error) => self.error = Some(error),
         }
     }
 
+    pub fn search_source(&mut self, source: &str, query: SourceQuery) {
+        self.source_loading = true;
+        self.source_offline = false;
+        self.backend.source_search(source, query);
+    }
+
     pub fn search_radio(&mut self) {
-        let query = RadioQuery {
-            name: self.radio_query.name.text.trim().to_string(),
-            country: self.radio_query.country.text.trim().to_string(),
-            tag: self.radio_query.tag.text.trim().to_string(),
-        };
-        if query.name.is_empty() && query.country.is_empty() && query.tag.is_empty() {
-            self.refresh_radio_favorites();
+        let name = self.radio_query.name.text.trim().to_string();
+        let country = self.radio_query.country.text.trim().to_string();
+        let tag = self.radio_query.tag.text.trim().to_string();
+        if name.is_empty() && country.is_empty() && tag.is_empty() {
+            self.refresh_source_favorites("radio");
             return;
         }
-        self.radio_loading = true;
-        self.radio_offline = false;
-        self.backend.radio_search(query);
+        let mut query = SourceQuery {
+            text: name,
+            ..SourceQuery::default()
+        };
+        if !country.is_empty() {
+            query.set_filter("country", country);
+        }
+        if !tag.is_empty() {
+            query.set_filter("tag", tag);
+        }
+        self.search_source("radio", query);
     }
 
-    fn set_radio_items(&mut self, items: Vec<SourceItem>) {
-        self.radio_keys = items
+    fn set_source_items(&mut self, items: Vec<SourceItem>) {
+        self.source_keys = items
             .iter()
-            .map(|item| format!("radio-{}", item.id))
+            .map(|item| format!("{}-{}", item.source.scheme(), item.id))
             .collect();
-        self.radio_items = items;
+        self.source_items = items;
     }
 
-    pub fn toggle_radio_favorite(&mut self, id: &str) {
-        match self.backend.radio_toggle_favorite(id) {
+    pub fn toggle_source_favorite(&mut self, source: &str, id: &str) {
+        match self.backend.source_toggle_favorite(source, id) {
             Ok(favorite) => {
-                if let Some(item) = self.radio_items.iter_mut().find(|item| item.id == id) {
+                if let Some(item) = self.source_items.iter_mut().find(|item| item.id == id) {
                     item.favorite = favorite;
                 }
                 self.list_version = self.list_version.wrapping_add(1);
@@ -350,8 +363,8 @@ impl UiState {
         }
     }
 
-    pub fn play_radio(&mut self, id: &str) {
-        self.backend.radio_play(id);
+    pub fn play_source(&mut self, source: &str, id: &str) {
+        self.backend.source_play(source, id);
     }
 
     pub fn open_album(&mut self, album_id: AlbumId) {
@@ -680,9 +693,9 @@ impl UiState {
                 if source != "radio" {
                     return false;
                 }
-                self.radio_loading = false;
-                self.radio_offline = offline;
-                self.set_radio_items(items);
+                self.source_loading = false;
+                self.source_offline = offline;
+                self.set_source_items(items);
                 self.list_version = self.list_version.wrapping_add(1);
                 true
             }
@@ -694,7 +707,7 @@ impl UiState {
                 if source != "radio" {
                     return false;
                 }
-                self.radio_loading = false;
+                self.source_loading = false;
                 self.error = Some(message);
                 true
             }
@@ -702,7 +715,7 @@ impl UiState {
                 if source != "radio" {
                     return false;
                 }
-                let Some(item) = self.radio_items.iter_mut().find(|item| item.id == id) else {
+                let Some(item) = self.source_items.iter_mut().find(|item| item.id == id) else {
                     return false;
                 };
                 item.image_path = Some(path);
@@ -876,7 +889,7 @@ fn scene_sources(state: &mut UiState) {
 
 fn scene_radio(state: &mut UiState) {
     state.view = View::Radio;
-    state.radio_items = vec![
+    state.source_items = vec![
         musify_core::SourceItem {
             id: "demo-jazz".into(),
             source: musify_core::SourceId::radio("https://stream.example/jazz"),
@@ -898,10 +911,10 @@ fn scene_radio(state: &mut UiState) {
             image_path: None,
         },
     ];
-    state.radio_keys = state
-        .radio_items
+    state.source_keys = state
+        .source_items
         .iter()
-        .map(|item| format!("radio-{}", item.id))
+        .map(|item| format!("{}-{}", item.source.scheme(), item.id))
         .collect();
     state.stream_status = StreamStatus::Playing;
     state.current = Some(QueueItem {

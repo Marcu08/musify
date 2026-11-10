@@ -22,11 +22,11 @@ pub fn view(s: &UiState) -> El {
     let search = common::action_button(i18n::RADIO_SEARCH, true)
         .on_press(|s: &mut UiState| s.search_radio());
     let favorites = common::action_button(i18n::RADIO_FAVORITES, false)
-        .on_press(|s: &mut UiState| s.refresh_radio_favorites());
+        .on_press(|s: &mut UiState| s.refresh_source_favorites("radio"));
 
-    let status = if s.radio_loading {
+    let status = if s.source_loading {
         Some(i18n::RADIO_LOADING.to_string())
-    } else if s.radio_offline {
+    } else if s.source_offline {
         Some(i18n::RADIO_OFFLINE.to_string())
     } else {
         None
@@ -48,11 +48,11 @@ pub fn view(s: &UiState) -> El {
         heading = heading.child(text(status).font(theme::TINY).color(p.accent));
     }
 
-    let list = if s.radio_items.is_empty() {
+    let list = if s.source_items.is_empty() {
         common::empty_state(i18n::RADIO_EMPTY, i18n::RADIO_EMPTY_HINT, None)
     } else {
         let mut rows = col().w_full().gap(2.0);
-        for item in &s.radio_items {
+        for item in &s.source_items {
             rows = rows.child(station_row(s, item));
         }
         col()
@@ -152,11 +152,13 @@ fn station_row(s: &UiState, item: &musify_core::SourceItem) -> El {
             } else {
                 i18n::RADIO_ADD_FAVORITE
             })
-            .on_press(move |s: &mut UiState| s.toggle_radio_favorite(&favorite_id)),
+            .on_press(move |s: &mut UiState| {
+                s.toggle_source_favorite("radio", &favorite_id);
+            }),
         )
         .child(
             common::action_button(i18n::RADIO_PLAY, true)
-                .on_press(move |s: &mut UiState| s.play_radio(&id)),
+                .on_press(move |s: &mut UiState| s.play_source("radio", &id)),
         )
         .child(el().w(4.0))
         .child(

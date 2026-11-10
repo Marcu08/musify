@@ -6,7 +6,6 @@ members = [
     "crates/core",
     "crates/library",
     "crates/radio",
-    "crates/spotify",
     "crates/ui",
 ]
 default-members = ["crates/app"]
@@ -24,7 +23,6 @@ musify-audio = { path = "crates/audio" }
 musify-library = { path = "crates/library" }
 musify-radio = { path = "crates/radio" }
 musify-ui = { path = "crates/ui" }
-musify-spotify = { path = "crates/spotify" }
 
 anyhow = "1"
 thiserror = "2"

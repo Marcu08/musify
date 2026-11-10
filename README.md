@@ -46,6 +46,10 @@ un commit preciso e confinata al crate `musify-ui`.
   preferiti locali, streaming MP3/AAC/Ogg con buffer adattivo, riconnessione e
   riapertura del decoder Ogg, metadati ICY, favicon in cache limitata e badge
   della fonte. HLS non è supportato e viene rifiutato con un errore chiaro.
+- **Fonti astratte (M5.2)**: la radio implementa `SourceProvider` nel core
+  (schema, ricerca, preferiti, risoluzione Live/OnDemand). L'app instrada le
+  richieste con un registro per schema; comandi ed eventi della UI non nominano
+  più la radio.
 - **Indagine CPU M5.1**: i ridisegni sono stati strumentati; durante la
   riproduzione Rune presenta a ~60 fps mentre i commit logici sono pochi. Le
   varianti provate (coalescing, `Tx::instant`, `Tx::settle`, wake throttling)
@@ -146,12 +150,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 
 | Crate | Responsabilità |
 | --- | --- |
-| `musify-core` | tipi di dominio, `Command`/`Event`, trait `PlaybackSource` e `LibraryProvider` |
+| `musify-core` | tipi di dominio, `Command`/`Event`, trait `SourceProvider` e `LibraryProvider` |
 | `musify-audio` | decodifica, output, coda, seek, volume, gapless |
 | `musify-library` | scanner incrementale, SQLite, ricerca, copertine, watcher |
+| `musify-radio` | `SourceProvider` Radio Browser, cache e preferiti SQLite |
 | `musify-ui` | presentazione Rune, nessuna logica di dominio |
-| `musify-spotify` | scheletro per la seconda sorgente (M5, opzionale) |
-| `musify-app` | binario, config, cablaggio, SMTC, persistenza |
+| `musify-app` | binario, config, registro fonti, SMTC, persistenza, coda |
 
 Dettagli completi in [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -167,10 +171,10 @@ questa macchina.
 | Resampler sinc 44,1 → 48 kHz | **1,25% di un core** (lineare: 0,31%), 0 underrun | < 2% |
 | Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
 | UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
-| UI in riproduzione locale | **8,43% di un core**, **0,70%** su 12 thread | < 2% |
-| Radio MP3 128 kbps | **8,28% di un core**, **0,69%** su 12 thread | < 2% |
-| Avvio app completa | **1,15 s** mediana (min 1,11, max 2,11) | < 300 ms |
-| RAM | **185 MB** working set a riposo, 188 MB locale, 195 MB radio | < 80 MB |
+| UI in riproduzione locale | **7,80% di un core**, **0,65%** su 12 thread | < 2% |
+| Radio MP3 128 kbps | **8,43% di un core**, **0,70%** su 12 thread | < 2% |
+| Avvio app completa | **1,11 s** mediana (min 1,06, max 2,37) | < 300 ms |
+| RAM | **185 MB** working set a riposo, 187 MB locale, 195 MB radio | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
 l'inizializzazione GPU sono la parte dominante. La UI a riposo non ridisegna.
@@ -188,8 +192,9 @@ i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
 | M3 — UI Rune | completata | [M3](docs/M3-UI-REPORT.md) |
 | M4 — Windows, SMTC, persistenza | completata | [M4](docs/M4-WINDOWS-REPORT.md) |
 | M4.5 — Prestazioni e qualità locale | completata | [M4.5](docs/M45-REPORT.md) |
-| M5 — Fonti online e radio internet | completata (radio); Spotify no | [M5](docs/M5-RADIO-REPORT.md) |
+| M5 — Fonti online e radio internet | completata | [M5](docs/M5-RADIO-REPORT.md) |
 | M5.1 — Rifinitura CPU e radio | radio completata; CPU non ridotta | [M5.1](docs/M51-REPORT.md) |
+| M5.2 — Pulizia e astrazione fonti | completata | [M5.2](docs/M52-REPORT.md) |
 
 ## Sviluppo
 
@@ -222,6 +227,8 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 | `%APPDATA%\Musify\state.json` | coda, brano corrente, posizione |
 | `%APPDATA%\Musify\library.sqlite3` | indice della libreria |
 | `%APPDATA%\Musify\covers\` | cache copertine JPEG |
+| `%APPDATA%\Musify\radio.sqlite3` | cache ricerche e stazioni preferite |
+| `%APPDATA%\Musify\radio-icons\` | favicon radio, massimo 256 file / 16 MB |
 
 ## Limiti noti
 
@@ -246,17 +253,16 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 - La riconnessione radio è coperta da test sul trasporto HTTP e sui metadati, non
   da una prova di più ore. Per Ogg un cambio di stream a metà può richiedere un
   riavvio del decoder.
-- La cache delle ricerche radio non ha scadenza e non c'è copertina della
-  stazione (favicon): la UI usa il badge FM.
-- `musify-spotify` resta uno scheletro compilabile dietro feature `spotify`.
+- La cache delle ricerche radio scade dopo 7 giorni; le favicon sono limitate a
+  256 file / 16 MB. Senza rete e senza cache valida la ricerca mostra l'errore.
+- Il registro fonti è pronto per altre fonti, ma per ora contiene solo la radio;
+  non ci sono client API o flussi non implementati.
 
 ## Note legali
 
-Musify è un progetto personale. Non aggira DRM, non registra e non distribuisce
-flussi Spotify. L'eventuale uso di `librespot` per riprodurre contenuti Spotify
-può non essere in linea con i termini di servizio di Spotify: valuta tu se
-usarlo sul tuo account Premium. Nessun token o segreto viene salvato nel
-repository o nei log.
+Musify è un progetto personale. Non aggira DRM, non registra, non scarica e non
+distribuisce flussi protetti. Usa solo fonti pubbliche e API autorizzate; nessun
+token o segreto viene salvato nel repository o nei log.
 
 ## Crediti
 

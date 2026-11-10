@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use musify_core::SourceItem;
+use musify_core::{
+    ResolvedSource, SourceError, SourceItem, SourcePlayback, SourceProvider, SourceQuery,
+    SourceSearch,
+};
 use serde::Deserialize;
 
 use crate::error::RadioError;
@@ -334,6 +337,64 @@ fn client() -> Result<reqwest::Client, RadioError> {
         .map_err(|error| RadioError::Network(error.to_string()))
 }
 
+impl SourceProvider for RadioBrowser {
+    fn scheme(&self) -> &'static str {
+        "radio"
+    }
+
+    fn search(&self, query: &SourceQuery) -> Result<SourceSearch, SourceError> {
+        let search = SearchQuery {
+            name: query.text.trim().to_string(),
+            country: query.filter("country").unwrap_or_default().to_string(),
+            tag: query.filter("tag").unwrap_or_default().to_string(),
+        };
+        let outcome = RadioBrowser::search(self, &search, 100).map_err(source_error)?;
+        Ok(SourceSearch {
+            items: outcome.items,
+            offline: outcome.offline,
+        })
+    }
+
+    fn favorites(&self) -> Result<Vec<SourceItem>, SourceError> {
+        RadioBrowser::favorites(self).map_err(source_error)
+    }
+
+    fn toggle_favorite(&self, id: &str) -> Result<bool, SourceError> {
+        let station = self
+            .station(id)
+            .map_err(source_error)?
+            .ok_or_else(|| SourceError::NotFound(id.to_string()))?;
+        RadioBrowser::toggle_favorite(self, &station).map_err(source_error)
+    }
+
+    fn resolve(&self, id: &str) -> Result<ResolvedSource, SourceError> {
+        let station = self
+            .station(id)
+            .map_err(source_error)?
+            .ok_or_else(|| SourceError::NotFound(id.to_string()))?;
+        Ok(ResolvedSource {
+            track: station.to_track(),
+            playback: SourcePlayback::Live,
+        })
+    }
+
+    fn artwork(&self, id: &str) -> Result<Option<PathBuf>, SourceError> {
+        let station = self
+            .station(id)
+            .map_err(source_error)?
+            .ok_or_else(|| SourceError::NotFound(id.to_string()))?;
+        self.cache_icon(&station).map_err(source_error)
+    }
+}
+
+fn source_error(error: RadioError) -> SourceError {
+    match error {
+        RadioError::Database(message) => SourceError::Storage(message),
+        RadioError::Json(message) => SourceError::Network(message),
+        RadioError::Network(message) => SourceError::Network(message),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -409,5 +470,28 @@ mod tests {
         assert_eq!(cached.items.len(), 1);
         assert!(cached.items[0].favorite);
         drop(server);
+    }
+
+    #[test]
+    fn provider_resolves_cached_stations_as_live_streams() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(RadioStore::open(&dir.path().join("radio.sqlite3")).expect("store"));
+        let browser =
+            RadioBrowser::with_base_url(Arc::clone(&store), Some("http://127.0.0.1:1".into()));
+        let station = Station {
+            id: "station-1".into(),
+            name: "Fake Jazz".into(),
+            url_resolved: "http://127.0.0.1:1/live.mp3".into(),
+            ..Station::default()
+        };
+        store.upsert(&station).expect("cached station");
+
+        let provider: &dyn SourceProvider = &browser;
+        assert_eq!(provider.scheme(), "radio");
+        let resolved = provider.resolve("station-1").expect("resolve");
+        assert_eq!(resolved.playback, SourcePlayback::Live);
+        assert_eq!(resolved.track.source.scheme(), "radio");
+        assert_eq!(resolved.track.title, "Fake Jazz");
+        assert!(provider.resolve("missing").is_err());
     }
 }

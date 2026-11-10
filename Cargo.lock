@@ -2172,7 +2172,6 @@ dependencies = [
  "musify-core",
  "musify-library",
  "musify-radio",
- "musify-spotify",
  "musify-ui",
  "serde",
  "serde_json",
@@ -2244,13 +2243,6 @@ dependencies = [
  "tokio",
  "tracing",
  "wiremock",
-]
-
-[[package]]
-name = "musify-spotify"
-version = "0.1.0"
-dependencies = [
- "musify-core",
 ]
 
 [[package]]

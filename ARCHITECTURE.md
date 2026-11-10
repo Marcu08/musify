@@ -1,19 +1,18 @@
 # Architettura
 
-Musify è un workspace Cargo. Il core non conosce Rune, SQLite, cpal né Spotify: la UI comunica
-solo con comandi ed eventi.
+Musify è un workspace Cargo. Il core non conosce Rune, SQLite, cpal né le API delle fonti:
+la UI comunica solo con comandi ed eventi.
 
 ## Crate
 
 | Crate | Responsabilità | Dipende da UI? |
 | --- | --- | --- |
-| `musify-core` | tipi di dominio, `Command`, `Event`, trait `PlaybackSource` e `LibraryProvider` | no |
+| `musify-core` | tipi di dominio, `Command`, `Event`, trait `SourceProvider` e `LibraryProvider` | no |
 | `musify-audio` | decodifica (symphonia), output (cpal/WASAPI), coda, seek, volume | no |
 | `musify-library` | scanner (walkdir + lofty), indice SQLite, ricerca, cache copertine | no |
-| `musify-radio` | client Radio Browser, cache e preferiti SQLite | no |
+| `musify-radio` | `SourceProvider` Radio Browser, cache e preferiti SQLite | no |
 | `musify-ui` | viste e input Rune; traduce gesti in `Command` e applica `Event` | sì |
-| `musify-spotify` | seconda `PlaybackSource` via librespot/rspotify (predisposta) | no |
-| `musify-app` | config, logging, cablaggio dei canali, ciclo di vita | no |
+| `musify-app` | config, logging, registro fonti, SMTC, persistenza, coda | no |
 
 ## Flusso comandi/eventi
 
@@ -21,7 +20,7 @@ solo con comandi ed eventi.
 ┌──────────────┐   Command    ┌──────────────────┐   chiamate   ┌──────────────┐
 │  UI (Rune)   │ ───────────▶ │  App controller  │ ───────────▶ │ audio engine │
 │              │              │                  │              │ library      │
-│              │ ◀─────────── │                  │ ◀─────────── │ spotify      │
+│              │ ◀─────────── │                  │ ◀─────────── │ sources      │
 └──────────────┘    Event     └──────────────────┘   Event      └──────────────┘
 ```
 
@@ -89,7 +88,9 @@ UI (Rune, thread principale)
 ```
 
 - `musify-ui` dipende solo da `musify-core` e da Rune; il backend è il trait
-  `ui::Backend`. L'app implementa il trait in `crates/app/src/backend.rs`.
+  `ui::Backend`. L'app implementa il trait in `crates/app/src/backend/mod.rs`,
+  con la logica divisa in `persistence.rs`, `queue.rs`, `smtc.rs` e
+  `sources.rs`.
 - Il thread UI non fa I/O audio o SQLite pesante: le liste vengono lette dal
   backend al reload; le copertine sono caricate on demand da `ImageCache`.
 - `virtual_rows` + `virtual_rows_version` costruiscono solo le righe visibili;
@@ -139,8 +140,11 @@ UI (Rune, thread principale)
 
 ```text
 UI Fonti/Radio
-  ├─ Backend.radio_search ──▶ musify-radio ──▶ Radio Browser (HTTPS)
-  └─ Backend.radio_play ────▶ Command::PlayTrack (Track.source = radio://url)
+  ├─ Backend.source_search("radio") ──▶ SourceRegistry ──▶ musify-radio
+  └─ Backend.source_play("radio") ────▶ SourceProvider::resolve
+                                             │
+                                             ▼
+                         Command::PlayTrack (Track.source = radio://url)
                                       │
                               audio engine
                                       │
@@ -153,8 +157,9 @@ UI Fonti/Radio
 - `SourceId` è l'unico dato di provenienza nel core; `Track.source` vale
   `local://path` per la libreria e `radio://url` per gli stream. Nessun tipo di
   una fonte specifica attraversa il core.
-- `musify-radio` non conosce l'audio: cerca stazioni, le converte in
-  `SourceItem`/`Track` e salva cache e preferiti in `radio.sqlite3`. Ogni
+- `musify-radio` non conosce l'audio: implementa `SourceProvider` (schema
+  `radio`, ricerca, preferiti, risoluzione `Live`, artwork), converte le stazioni
+  in `SourceItem`/`Track` e salva cache e preferiti in `radio.sqlite3`. Ogni
   richiesta crea e distrugge il proprio runtime Tokio.
 - Lo stream HTTP vive in `musify-audio`: thread dedicato, runtime Tokio
   `current_thread` solo per la durata dello stream, buffer 128 KiB→1 MiB,
@@ -179,6 +184,29 @@ UI Fonti/Radio
   continuazione del vecchio stream.
 - HLS è rifiutato esplicitamente: richiederebbe playlist, segmenti TS/fMP4,
   chiavi e gestione live, fuori dal perimetro dello streaming progressivo.
+
+## Astrazione fonti e backend modulare (M5.2)
+
+- `musify-core::SourceProvider` è l'unica interfaccia di una fonte online:
+  `scheme()`, `search(&SourceQuery)`, `favorites()`, `toggle_favorite(id)`,
+  `resolve(id)` e `artwork(id)` opzionale. `SourceQuery` ha testo libero e
+  filtri chiave/valore interpretati solo dalla fonte.
+- `resolve` restituisce un `ResolvedSource` con il `Track` e `SourcePlayback`:
+  `Live` per gli stream infiniti, `OnDemand { duration, seekable }` per le
+  risorse finite. La radio restituisce sempre `Live`.
+- L'app costruisce un `SourceRegistry` per schema. Il registro incrementa un
+  `request_id` per fonte, scarta i risultati superati, emette
+  `SourceResults`/`SourceSearchFailed`/`SourceArtwork` con il campo `source` e
+  precarica al massimo otto artwork per risposta. La logica di rete e cache
+  resta dentro il provider.
+- Il trait `ui::Backend` espone `source_search`, `source_favorites`,
+  `source_toggle_favorite` e `source_play`, tutti con lo schema come primo
+  argomento. La UI radio chiama gli stessi metodi con `"radio"`.
+- `backend.rs` è stato diviso in `backend/mod.rs` (cablaggio e tratti),
+  `persistence.rs` (config TOML), `queue.rs` (`state.json`), `smtc.rs`
+  (metadati Windows) e `sources.rs` (registro fonti).
+- Lo scheletro della seconda fonte e la relativa feature sono stati rimossi:
+  nessuna fonte è dichiarata se non è implementata.
 
 ## Libreria locale (M2)
 

@@ -15,4 +15,7 @@ pub use domain::{
 };
 pub use event::{Event, StreamEvent, StreamStatus};
 pub use ids::{AlbumId, ArtistId, PlaylistId, QueueItemId, TrackId};
-pub use traits::{LibraryError, LibraryProvider, PlaybackError, PlaybackSource};
+pub use traits::{
+    LibraryError, LibraryProvider, ResolvedSource, SourceError, SourcePlayback, SourceProvider,
+    SourceQuery, SourceSearch,
+};

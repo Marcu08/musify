@@ -1,7 +1,7 @@
 # Checklist manuale — Musify
 
-Data: 2026-11-09
-Ambito: M4.5 (prestazioni e qualità locale) e M4 (Windows).
+Data: 2026-11-10
+Ambito: M5.2 (registro fonti e refactor backend), M5.1/M5 (radio) e M4 (Windows).
 Queste verifiche richiedono una finestra reale, il mixer di Windows o la sessione
 utente: non sono automatizzabili in modo affidabile. Eseguirle su una build
 release (`cargo build -p musify --release`) e annotare data, DPI e dispositivo
@@ -113,7 +113,19 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 | Provare una stazione HLS | Deve fallire con "gli stream HLS non sono supportati", non bloccare la UI. |
 | Avviare `scripts/soak-radio.ps1` per 2 ore | Private bytes stabili; working set può essere trim quando la finestra perde il foreground. |
 
-## 7. Riposo
+## 7. Registro fonti e backend modulare (M5.2)
+
+| Passo | Risultato atteso |
+| --- | --- |
+| Aprire Fonti → Radio dopo l'aggiornamento | La vista è identica a M5.1: stessi campi, preferiti e badge `Radio`. |
+| Cercare, aprire i preferiti e avviare una stazione | Le tre azioni passano dal registro fonti e producono lo stesso risultato di M5.1. |
+| Avviare due ricerche in rapida successione | Arriva solo il risultato dell'ultima; nessun errore residuo della prima. |
+| Controllare i log all'avvio | Nessun errore di registrazione della fonte `radio`; una fonte sconosciuta produce un errore chiaro, non un panic. |
+| Chiudere e riaprire con una coda locale | `state.json` viene ripristinato in pausa; la radio non viene salvata. |
+| Con la riproduzione attiva, controllare l'overlay Windows | Titolo, artista, copertina e posizione si aggiornano come in M5.1. |
+| Aprire `%APPDATA%\Musify\` | `config.toml`, `state.json`, `library.sqlite3`, `radio.sqlite3` e `radio-icons/` sono gli unici file attesi. |
+
+## 8. Riposo
 
 | Passo | Risultato atteso |
 | --- | --- |

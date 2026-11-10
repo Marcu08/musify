@@ -1,23 +1,89 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::{Album, Artist, PlaybackState, SearchResults, Track, TrackSort};
+use crate::{Album, Artist, SearchResults, SourceItem, Track, TrackSort};
 
-/// A source that can play one track at a time: the local audio engine or Spotify.
+/// Search terms for an online source. `text` is the free-text query; filters
+/// are source-specific keys (`country`, `tag`, ...). The core never interprets
+/// the keys.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceQuery {
+    pub text: String,
+    pub filters: Vec<(String, String)>,
+}
+
+impl SourceQuery {
+    #[must_use]
+    pub fn filter(&self, key: &str) -> Option<&str> {
+        self.filters
+            .iter()
+            .find(|(candidate, value)| candidate == key && !value.trim().is_empty())
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub fn set_filter(&mut self, key: &str, value: impl Into<String>) {
+        let value = value.into();
+        if let Some((_, current)) = self
+            .filters
+            .iter_mut()
+            .find(|(candidate, _)| candidate == key)
+        {
+            *current = value;
+        } else {
+            self.filters.push((key.to_string(), value));
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSearch {
+    pub items: Vec<SourceItem>,
+    pub offline: bool,
+}
+
+/// How the engine must treat a resolved source item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourcePlayback {
+    /// Endless stream: no duration, no seek, reconnect on loss.
+    Live,
+    /// Finite resource: duration and whether the transport supports seeking.
+    OnDemand { duration: Duration, seekable: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSource {
+    pub track: Track,
+    pub playback: SourcePlayback,
+}
+
+/// One online source (radio, podcast, a remote library, ...).
 ///
-/// The engine owns the queue; a source only knows how to render the current track.
-pub trait PlaybackSource: Send {
-    fn play(&mut self, track: &Track) -> Result<(), PlaybackError>;
-    fn pause(&mut self) -> Result<(), PlaybackError>;
-    fn resume(&mut self) -> Result<(), PlaybackError>;
-    fn stop(&mut self) -> Result<(), PlaybackError>;
-    fn seek(&mut self, position: Duration) -> Result<(), PlaybackError>;
-    /// Volume is expressed as 0..=100 so it survives the command channel unchanged.
-    fn set_volume(&mut self, volume: u16) -> Result<(), PlaybackError>;
-    fn state(&self) -> PlaybackState;
-    fn position(&self) -> Duration;
-    fn duration(&self) -> Option<Duration>;
+/// The provider only discovers and resolves items. Playback stays in the audio
+/// engine, and the core only transports `SourceId`/`Track`.
+pub trait SourceProvider: Send + Sync {
+    fn scheme(&self) -> &'static str;
+    fn search(&self, query: &SourceQuery) -> Result<SourceSearch, SourceError>;
+    fn favorites(&self) -> Result<Vec<SourceItem>, SourceError>;
+    fn toggle_favorite(&self, id: &str) -> Result<bool, SourceError>;
+    fn resolve(&self, id: &str) -> Result<ResolvedSource, SourceError>;
+    /// Optional cover/artwork. Called from a background thread; may download.
+    fn artwork(&self, _id: &str) -> Result<Option<PathBuf>, SourceError> {
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum SourceError {
+    #[error("source network error: {0}")]
+    Network(String),
+    #[error("source storage error: {0}")]
+    Storage(String),
+    #[error("source item not found: {0}")]
+    NotFound(String),
+    #[error("source does not support this operation: {0}")]
+    Unsupported(String),
 }
 
 /// Read-only queries the UI can make against the local library.
@@ -31,20 +97,6 @@ pub trait LibraryProvider: Send + Sync {
     fn albums(&self, limit: usize, offset: usize) -> Result<Vec<Album>, LibraryError>;
     fn artists(&self, limit: usize, offset: usize) -> Result<Vec<Artist>, LibraryError>;
     fn search(&self, query: &str, limit: usize) -> Result<SearchResults, LibraryError>;
-}
-
-#[derive(Debug, Error)]
-pub enum PlaybackError {
-    #[error("the audio source is not available")]
-    Unavailable,
-    #[error("the requested seek position is outside the track")]
-    InvalidSeek,
-    #[error("decode error: {0}")]
-    Decode(String),
-    #[error("audio output error: {0}")]
-    Output(String),
-    #[error("the source does not support this operation: {0}")]
-    Unsupported(&'static str),
 }
 
 #[derive(Debug, Error)]
@@ -62,11 +114,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn playback_errors_have_ui_ready_messages() {
-        let error = PlaybackError::InvalidSeek;
-        assert_eq!(
-            error.to_string(),
-            "the requested seek position is outside the track"
-        );
+    fn source_errors_have_ui_ready_messages() {
+        let error = SourceError::NotFound("station".into());
+        assert_eq!(error.to_string(), "source item not found: station");
+        let mut query = SourceQuery::default();
+        query.set_filter("country", "Italy");
+        assert_eq!(query.filter("country"), Some("Italy"));
     }
 }
