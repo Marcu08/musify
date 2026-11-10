@@ -45,6 +45,8 @@ struct State {
     status: StreamStatus,
     title: Option<String>,
     stopped: bool,
+    generation: u64,
+    connections: u32,
 }
 
 impl HttpStream {
@@ -59,6 +61,8 @@ impl HttpStream {
                 status: StreamStatus::Connecting,
                 title: None,
                 stopped: false,
+                generation: 1,
+                connections: 0,
             }),
             ready: Condvar::new(),
             updates: Mutex::new(VecDeque::new()),
@@ -117,6 +121,23 @@ impl HttpStream {
                 ));
             }
         }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .generation
+    }
+
+    pub fn content_type(&self) -> Option<String> {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .content_type
+            .clone()
     }
 
     pub fn take_updates(&self) -> Vec<StreamEvent> {
@@ -292,7 +313,16 @@ async fn read_once(
     {
         let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
         state.content_type.clone_from(&content_type);
+        state.connections = state.connections.saturating_add(1);
+        if state.connections > 1 {
+            // A new connection restarts the transport. The decoder must not
+            // parse the new stream as a continuation of the old one; clearing
+            // the buffer and bumping the generation makes it reopen.
+            state.buffer.clear();
+            state.generation = state.generation.wrapping_add(1);
+        }
     }
+    shared.ready.notify_all();
     set_status(shared, StreamStatus::Buffering);
 
     let mut parser = IcyParser::new(metaint);
@@ -641,6 +671,10 @@ mod tests {
         }
         assert!(titles.iter().any(|title| title == "One"), "{titles:?}");
         assert!(titles.iter().any(|title| title == "Two"), "{titles:?}");
+        assert!(
+            stream.generation() >= 2,
+            "the stream should have reconnected"
+        );
         server.join().expect("server thread");
     }
 }

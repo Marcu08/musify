@@ -10,6 +10,7 @@ use crate::station::Station;
 
 pub struct RadioStore {
     connection: Mutex<Connection>,
+    data_dir: std::path::PathBuf,
 }
 
 impl RadioStore {
@@ -47,7 +48,15 @@ impl RadioStore {
             .map_err(|error| RadioError::Database(error.to_string()))?;
         Ok(Self {
             connection: Mutex::new(connection),
+            data_dir: path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf(),
         })
+    }
+
+    pub fn icon_dir(&self) -> std::path::PathBuf {
+        self.data_dir.join("radio-icons")
     }
 
     pub fn upsert_many(&self, stations: &[Station]) -> Result<(), RadioError> {
@@ -170,7 +179,27 @@ impl RadioStore {
             .map_err(|error| RadioError::Database(error.to_string()))
     }
 
-    pub fn cached_search(&self, query: &Query, limit: usize) -> Result<Vec<Station>, RadioError> {
+    #[cfg(test)]
+    pub fn age_cache(&self, seconds: i64) -> Result<(), RadioError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| RadioError::Database("radio database lock poisoned".into()))?;
+        connection
+            .execute(
+                "UPDATE stations SET cached_at = cached_at - ?1",
+                params![seconds.max(0)],
+            )
+            .map_err(|error| RadioError::Database(error.to_string()))?;
+        Ok(())
+    }
+
+    pub fn cached_search(
+        &self,
+        query: &Query,
+        limit: usize,
+        max_age_secs: i64,
+    ) -> Result<Vec<Station>, RadioError> {
         let name = format!("%{}%", query.name.trim());
         let country = format!("%{}%", query.country.trim());
         let tag = format!("%{}%", query.tag.trim());
@@ -186,13 +215,20 @@ impl RadioStore {
                  WHERE (?1 = '%%' OR name LIKE ?1)
                    AND (?2 = '%%' OR country LIKE ?2 OR country_code LIKE ?2)
                    AND (?3 = '%%' OR tags LIKE ?3)
+                   AND (?5 = 0 OR cached_at >= CAST(strftime('%s','now') AS INTEGER) - ?5)
                  ORDER BY votes DESC, name
                  LIMIT ?4",
             )
             .map_err(|error| RadioError::Database(error.to_string()))?;
         let rows = statement
             .query_map(
-                params![name, country, tag, i64::try_from(limit).unwrap_or(100)],
+                params![
+                    name,
+                    country,
+                    tag,
+                    i64::try_from(limit).unwrap_or(100),
+                    max_age_secs
+                ],
                 station_from_row,
             )
             .map_err(|error| RadioError::Database(error.to_string()))?;
@@ -320,7 +356,15 @@ mod tests {
             tag: "jazz".into(),
             ..Query::default()
         };
-        assert_eq!(store.cached_search(&query, 10).expect("cache").len(), 2);
+        assert_eq!(store.cached_search(&query, 10, 0).expect("cache").len(), 2);
+        store.age_cache(120).expect("age cache");
+        assert!(
+            store
+                .cached_search(&query, 10, 60)
+                .expect("fresh cache")
+                .is_empty()
+        );
+        assert_eq!(store.cached_search(&query, 10, 0).expect("cache").len(), 2);
         assert_eq!(
             store.station("a").expect("station").expect("exists").id,
             "a"

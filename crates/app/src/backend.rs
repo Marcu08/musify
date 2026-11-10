@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -49,6 +50,8 @@ pub struct AppBackend {
     config: Arc<Mutex<Config>>,
     library: Arc<Library>,
     radio: Arc<RadioBrowser>,
+    radio_request: Arc<AtomicU64>,
+    icon_inflight: Arc<Mutex<HashSet<String>>>,
     audio: Mutex<Option<AudioEngine>>,
     events: Mutex<Receiver<Event>>,
     events_tx: Sender<Event>,
@@ -151,6 +154,8 @@ impl AppBackend {
             config,
             library,
             radio,
+            radio_request: Arc::new(AtomicU64::new(0)),
+            icon_inflight: Arc::new(Mutex::new(HashSet::new())),
             audio: Mutex::new(audio),
             events: Mutex::new(event_rx),
             events_tx: event_tx,
@@ -687,9 +692,12 @@ impl Backend for AppBackend {
     }
 
     fn radio_search(&self, query: RadioQuery) {
+        let request_id = self.radio_request.fetch_add(1, Ordering::AcqRel) + 1;
         let browser = Arc::clone(&self.radio);
+        let requests = Arc::clone(&self.radio_request);
         let events = self.events_tx.clone();
         let waker = Arc::clone(&self.waker);
+        let icon_inflight = Arc::clone(&self.icon_inflight);
         let _ = thread::Builder::new()
             .name("musify-radio-search".into())
             .spawn(move || {
@@ -698,24 +706,54 @@ impl Backend for AppBackend {
                     country: query.country,
                     tag: query.tag,
                 };
-                let event = match browser.search(&query, 100) {
-                    Ok(outcome) => Event::SourceResults {
-                        source: "radio".into(),
-                        items: outcome.items,
-                        offline: outcome.offline,
-                    },
-                    Err(error) => Event::SourceSearchFailed {
-                        source: "radio".into(),
-                        message: error.to_string(),
-                    },
+                let (event, icon_ids) = match browser.search(&query, 100) {
+                    Ok(outcome) => {
+                        let icon_ids = outcome
+                            .items
+                            .iter()
+                            .take(8)
+                            .map(|item| item.id.clone())
+                            .collect();
+                        (
+                            Event::SourceResults {
+                                source: "radio".into(),
+                                request_id,
+                                items: outcome.items,
+                                offline: outcome.offline,
+                            },
+                            icon_ids,
+                        )
+                    }
+                    Err(error) => (
+                        Event::SourceSearchFailed {
+                            source: "radio".into(),
+                            request_id,
+                            message: error.to_string(),
+                        },
+                        Vec::new(),
+                    ),
                 };
+                // A newer search supersedes this one; drop the stale result.
+                if requests.load(Ordering::Acquire) != request_id {
+                    return;
+                }
                 let _ = events.send(event);
                 wake(&waker);
+                prefetch_icons(&browser, &events, &waker, &icon_inflight, icon_ids);
             });
     }
 
     fn radio_favorites(&self) -> Result<Vec<SourceItem>, String> {
-        self.radio.favorites().map_err(|error| error.to_string())
+        let items = self.radio.favorites().map_err(|error| error.to_string())?;
+        let ids: Vec<String> = items.iter().take(8).map(|item| item.id.clone()).collect();
+        let browser = Arc::clone(&self.radio);
+        let events = self.events_tx.clone();
+        let waker = Arc::clone(&self.waker);
+        let inflight = Arc::clone(&self.icon_inflight);
+        let _ = thread::Builder::new()
+            .name("musify-radio-icons".into())
+            .spawn(move || prefetch_icons(&browser, &events, &waker, &inflight, ids));
+        Ok(items)
     }
 
     fn radio_toggle_favorite(&self, id: &str) -> Result<bool, String> {
@@ -873,6 +911,39 @@ impl ScanCoordinator {
 fn send_event(events: &Sender<Event>, waker: &Arc<Mutex<Option<Waker>>>, event: Event) {
     let _ = events.send(event);
     wake(waker);
+}
+
+fn prefetch_icons(
+    browser: &RadioBrowser,
+    events: &Sender<Event>,
+    waker: &Arc<Mutex<Option<Waker>>>,
+    inflight: &Mutex<HashSet<String>>,
+    ids: Vec<String>,
+) {
+    for id in ids {
+        if let Ok(mut inflight) = inflight.lock()
+            && !inflight.insert(id.clone())
+        {
+            continue;
+        }
+        let cached = browser.station(&id).ok().flatten().and_then(|station| {
+            if browser.icon_path(&station).is_some() {
+                return None;
+            }
+            browser.cache_icon(&station).ok().flatten()
+        });
+        if let Some(path) = cached {
+            let _ = events.send(Event::SourceArtwork {
+                source: "radio".into(),
+                id: id.clone(),
+                path,
+            });
+            wake(waker);
+        }
+        if let Ok(mut inflight) = inflight.lock() {
+            inflight.remove(&id);
+        }
+    }
 }
 
 fn wake(waker: &Arc<Mutex<Option<Waker>>>) {

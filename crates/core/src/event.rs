@@ -45,12 +45,19 @@ pub enum Event {
     StreamTitleChanged(Option<String>),
     SourceResults {
         source: String,
+        request_id: u64,
         items: Vec<crate::SourceItem>,
         offline: bool,
     },
     SourceSearchFailed {
         source: String,
+        request_id: u64,
         message: String,
+    },
+    SourceArtwork {
+        source: String,
+        id: String,
+        path: std::path::PathBuf,
     },
     ScanStarted {
         folders: usize,

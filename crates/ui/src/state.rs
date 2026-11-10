@@ -673,6 +673,7 @@ impl UiState {
             }
             Event::SourceResults {
                 source,
+                request_id: _,
                 items,
                 offline,
             } => {
@@ -685,12 +686,27 @@ impl UiState {
                 self.list_version = self.list_version.wrapping_add(1);
                 true
             }
-            Event::SourceSearchFailed { source, message } => {
+            Event::SourceSearchFailed {
+                source,
+                request_id: _,
+                message,
+            } => {
                 if source != "radio" {
                     return false;
                 }
                 self.radio_loading = false;
                 self.error = Some(message);
+                true
+            }
+            Event::SourceArtwork { source, id, path } => {
+                if source != "radio" {
+                    return false;
+                }
+                let Some(item) = self.radio_items.iter_mut().find(|item| item.id == id) else {
+                    return false;
+                };
+                item.image_path = Some(path);
+                self.list_version = self.list_version.wrapping_add(1);
                 true
             }
             Event::ScanStarted { .. } => {
@@ -869,6 +885,7 @@ fn scene_radio(state: &mut UiState) {
             detail: "jazz, smooth, lounge".into(),
             uri: "https://stream.example/jazz".into(),
             favorite: true,
+            image_path: None,
         },
         musify_core::SourceItem {
             id: "demo-electro".into(),
@@ -878,6 +895,7 @@ fn scene_radio(state: &mut UiState) {
             detail: "electronic, house".into(),
             uri: "https://stream.example/electro".into(),
             favorite: false,
+            image_path: None,
         },
     ];
     state.radio_keys = state

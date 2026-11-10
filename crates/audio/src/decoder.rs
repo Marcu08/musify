@@ -32,6 +32,8 @@ pub(crate) struct TrackDecoder {
     resampler_flushed: bool,
     duration: Option<Duration>,
     stream: Option<Arc<HttpStream>>,
+    stream_generation: u64,
+    stream_description: String,
 }
 
 impl TrackDecoder {
@@ -53,32 +55,50 @@ impl TrackDecoder {
     }
 
     pub fn open_stream(source: &SourceId, output_rate: u32) -> Result<Self, AudioError> {
+        if source.uri().to_ascii_lowercase().contains(".m3u8") {
+            return Err(AudioError::Unsupported(
+                "gli stream HLS non sono supportati".into(),
+            ));
+        }
         let handle = Arc::new(HttpStream::start(source.uri().to_string()));
         let content_type = handle.wait_ready()?.unwrap_or_default();
-        let mut hint = Hint::new();
-        let extension = match content_type.as_str() {
-            value if value.contains("mpeg") => Some("mp3"),
-            value if value.contains("aac") => Some("aac"),
-            value if value.contains("ogg") => Some("ogg"),
-            value if value.contains("flac") => Some("flac"),
-            _ => source
-                .uri()
-                .rsplit('/')
-                .next()
-                .and_then(|name| name.split('?').next())
-                .and_then(|name| name.rsplit_once('.').map(|(_, ext)| ext)),
-        };
-        if let Some(extension) = extension {
-            hint.with_extension(extension);
+        if is_hls_content_type(&content_type) {
+            return Err(AudioError::Unsupported(
+                "gli stream HLS non sono supportati".into(),
+            ));
         }
+        let generation = handle.generation();
+        let hint = stream_hint(&content_type, source.uri());
         let reader = handle.reader();
-        Self::open_source(
+        let mut decoder = Self::open_source(
             MediaSourceStream::new(Box::new(reader), Default::default()),
             hint,
             output_rate,
             source.uri().to_string(),
             Some(handle),
-        )
+        )?;
+        decoder.stream_generation = generation;
+        Ok(decoder)
+    }
+
+    fn reopen_stream(&mut self) -> Result<(), AudioError> {
+        let Some(handle) = self.stream.as_ref().cloned() else {
+            return Ok(());
+        };
+        let generation = handle.generation();
+        let content_type = handle.content_type().unwrap_or_default();
+        let hint = stream_hint(&content_type, &self.stream_description);
+        let reader = handle.reader();
+        let mut replacement = Self::open_source(
+            MediaSourceStream::new(Box::new(reader), Default::default()),
+            hint,
+            self.output_rate,
+            self.stream_description.clone(),
+            Some(handle),
+        )?;
+        replacement.stream_generation = generation;
+        *self = replacement;
+        Ok(())
     }
 
     fn open_source(
@@ -147,11 +167,19 @@ impl TrackDecoder {
             resampler_flushed: false,
             duration,
             stream: stream_handle,
+            stream_generation: 0,
+            stream_description: description.clone(),
         })
     }
 
     pub fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    fn stream_generation_changed(&self) -> bool {
+        self.stream
+            .as_ref()
+            .is_some_and(|stream| stream.generation() != self.stream_generation)
     }
 
     pub fn take_stream_updates(&self) -> Vec<StreamEvent> {
@@ -175,6 +203,12 @@ impl TrackDecoder {
             return Ok(out.len() / 2);
         }
         while out.len() / 2 < target_frames {
+            if self.stream_generation_changed() {
+                self.reopen_stream()?;
+                if out.len() / 2 >= target_frames {
+                    break;
+                }
+            }
             let packet = match self.reader.next_packet() {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
@@ -182,13 +216,23 @@ impl TrackDecoder {
                     break;
                 }
                 Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::UnexpectedEof => {
+                    if self.stream_generation_changed() {
+                        self.reopen_stream()?;
+                        continue;
+                    }
                     self.eof = true;
                     break;
                 }
                 Err(SymphoniaError::IoError(error)) if error.kind() == ErrorKind::Interrupted => {
                     continue;
                 }
-                Err(error) => return Err(AudioError::Decode(error.to_string())),
+                Err(error) => {
+                    if self.stream_generation_changed() {
+                        self.reopen_stream()?;
+                        continue;
+                    }
+                    return Err(AudioError::Decode(error.to_string()));
+                }
             };
             if packet.track_id != self.track_id {
                 continue;
@@ -269,6 +313,34 @@ impl TrackDecoder {
     }
 }
 
+fn is_hls_content_type(content_type: &str) -> bool {
+    let value = content_type.to_ascii_lowercase();
+    value.contains("mpegurl") || value.contains("m3u8")
+}
+
+fn stream_hint(content_type: &str, uri: &str) -> Hint {
+    let value = content_type.to_ascii_lowercase();
+    let extension = if value.contains("mpeg") {
+        Some("mp3")
+    } else if value.contains("aac") {
+        Some("aac")
+    } else if value.contains("ogg") || value.contains("opus") {
+        Some("ogg")
+    } else if value.contains("flac") {
+        Some("flac")
+    } else {
+        uri.rsplit('/')
+            .next()
+            .and_then(|name| name.split('?').next())
+            .and_then(|name| name.rsplit_once('.').map(|(_, ext)| ext))
+    };
+    let mut hint = Hint::new();
+    if let Some(extension) = extension {
+        hint.with_extension(extension);
+    }
+    hint
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -307,6 +379,16 @@ mod tests {
     #[test]
     fn decodes_mp3() {
         decode_all("tone.mp3");
+    }
+
+    #[test]
+    fn hls_urls_fail_with_a_clear_unsupported_error() {
+        let source = musify_core::SourceId::radio("https://stream.example/live/index.m3u8");
+        let Err(error) = TrackDecoder::open_stream(&source, 48_000) else {
+            panic!("HLS must not open as a progressive stream");
+        };
+        assert!(matches!(error, AudioError::Unsupported(_)));
+        assert!(error.to_string().contains("HLS"));
     }
 
     #[test]

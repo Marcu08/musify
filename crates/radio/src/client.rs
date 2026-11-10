@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,7 @@ pub struct RadioBrowser {
     store: Arc<RadioStore>,
     servers: Mutex<Vec<String>>,
     override_url: Option<String>,
+    cache_ttl_secs: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -40,10 +42,16 @@ impl RadioBrowser {
     }
 
     pub fn with_base_url(store: Arc<RadioStore>, base_url: Option<String>) -> Self {
+        let cache_ttl_hours = std::env::var("MUSIFY_RADIO_CACHE_TTL_HOURS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(24 * 7)
+            .clamp(1, 24 * 365);
         Self {
             store,
             servers: Mutex::new(Vec::new()),
             override_url: base_url,
+            cache_ttl_secs: cache_ttl_hours * 3600,
         }
     }
 
@@ -66,7 +74,9 @@ impl RadioBrowser {
                 }
             }
         }
-        let cached = self.store.cached_search(&query, limit)?;
+        let cached = self
+            .store
+            .cached_search(&query, limit, self.cache_ttl_secs)?;
         if cached.is_empty() {
             Err(last_error.unwrap_or_else(|| RadioError::Network("no server available".into())))
         } else {
@@ -80,7 +90,11 @@ impl RadioBrowser {
             .store
             .favorites()?
             .iter()
-            .map(|station| station.to_source_item(favorite_ids.contains(&station.id)))
+            .map(|station| {
+                let mut item = station.to_source_item(favorite_ids.contains(&station.id));
+                item.image_path = self.icon_path(station);
+                item
+            })
             .collect())
     }
 
@@ -95,12 +109,69 @@ impl RadioBrowser {
         self.store.station(id)
     }
 
+    pub fn icon_path(&self, station: &Station) -> Option<PathBuf> {
+        let url = station.favicon.trim();
+        if url.is_empty() {
+            return None;
+        }
+        let key = blake3::hash(url.as_bytes()).to_hex().to_string();
+        let path = self.store.icon_dir().join(format!("{key}.jpg"));
+        path.exists().then_some(path)
+    }
+
+    /// Downloads and caches a station icon. Icons are kept in a bounded folder
+    /// (256 files / 16 MB); this runs on a caller-provided background thread.
+    pub fn cache_icon(&self, station: &Station) -> Result<Option<PathBuf>, RadioError> {
+        if let Some(path) = self.icon_path(station) {
+            return Ok(Some(path));
+        }
+        let url = station.favicon.trim();
+        if url.is_empty() {
+            return Ok(None);
+        }
+        let runtime = runtime()?;
+        let client = client()?;
+        let response = runtime.block_on(async {
+            client
+                .get(url)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+        });
+        let response = response.map_err(|error| RadioError::Network(error.to_string()))?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > 2 * 1024 * 1024)
+        {
+            return Ok(None);
+        }
+        let bytes = runtime
+            .block_on(response.bytes())
+            .map_err(|error| RadioError::Network(error.to_string()))?;
+        let image = image::load_from_memory(&bytes)
+            .map_err(|error| RadioError::Json(format!("invalid station icon: {error}")))?;
+        let image = image.resize_to_fill(64, 64, image::imageops::FilterType::Triangle);
+        let dir = self.store.icon_dir();
+        std::fs::create_dir_all(&dir).map_err(|error| RadioError::Database(error.to_string()))?;
+        let key = blake3::hash(url.as_bytes()).to_hex().to_string();
+        let path = dir.join(format!("{key}.jpg"));
+        image
+            .save(&path)
+            .map_err(|error| RadioError::Database(error.to_string()))?;
+        prune_icons(&dir);
+        Ok(Some(path))
+    }
+
     fn outcome(&self, stations: Vec<Station>, offline: bool) -> Result<SearchOutcome, RadioError> {
         let favorites = self.store.favorite_ids()?;
         Ok(SearchOutcome {
             items: stations
                 .iter()
-                .map(|station| station.to_source_item(favorites.contains(&station.id)))
+                .map(|station| {
+                    let mut item = station.to_source_item(favorites.contains(&station.id));
+                    item.image_path = self.icon_path(station);
+                    item
+                })
                 .collect(),
             offline,
         })
@@ -218,6 +289,33 @@ impl RadioBrowser {
 struct ServerEntry {
     #[serde(default)]
     name: String,
+}
+
+fn prune_icons(dir: &std::path::Path) {
+    const MAX_FILES: usize = 256;
+    const MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(PathBuf, SystemTime, u64)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let modified = metadata.modified().ok()?;
+            Some((entry.path(), modified, metadata.len()))
+        })
+        .collect();
+    files.sort_by_key(|(_, modified, _)| std::cmp::Reverse(*modified));
+    let mut total = 0;
+    for (index, (path, _, size)) in files.iter().enumerate() {
+        total += size;
+        if index >= MAX_FILES || total > MAX_BYTES {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn runtime() -> Result<tokio::runtime::Runtime, RadioError> {

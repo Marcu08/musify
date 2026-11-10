@@ -98,6 +98,9 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 | --- | --- |
 | Aprire Fonti → Radio | La vista mostra i preferiti salvati e i campi Nome/Paese/Genere-tag. |
 | Cercare `jazz` | Arrivano stazioni; durante la ricerca compare lo stato di caricamento. |
+| Lanciare una seconda ricerca mentre la prima è in corso | Arriva solo il risultato della ricerca più recente; la UI non resta bloccata. |
+| Attendere il caricamento delle icone | Le righe passano dal badge FM alla favicon; le icone sono in `radio-icons/`. |
+| Cercare con cache più vecchia di 7 giorni e rete assente | La cache scaduta non viene mostrata; compare l'errore di rete. |
 | Salvare una stazione nei preferiti e riavviare | La stazione resta nei preferiti; la cache è in `radio.sqlite3`. |
 | Avviare una stazione MP3 | La barra mostra `Connessione…`, poi `Buffering…`, poi `In riproduzione`; si sente l'audio. |
 | Attendere il metadata ICY | Il titolo nella barra e nell'overlay SMTC cambia con il brano corrente. |
@@ -106,15 +109,16 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 | Lasciare la rete disconnessa | Dopo alcuni tentativi compare `Offline`; la UI non si blocca e i comandi rispondono. |
 | Chiudere Musify mentre la radio suona e riaprire | Nessuno stream viene riprodotto automaticamente e nessun URL radio viene salvato in `state.json`. |
 | Cercare con la rete assente | Se esistono risultati in cache, compaiono con l'avviso `Offline: mostro i risultati salvati`. |
-| Controllare il Task Manager a radio ferma | Il runtime Tokio del thread stream non resta attivo. |
-| Provare una stazione HLS | Deve fallire con un errore chiaro, non bloccare la UI. |
+| Controllare il Task Manager a radio ferma | Il runtime Tokio del thread stream non resta attivo; a riposo nessun runtime rete. |
+| Provare una stazione HLS | Deve fallire con "gli stream HLS non sono supportati", non bloccare la UI. |
+| Avviare `scripts/soak-radio.ps1` per 2 ore | Private bytes stabili; working set può essere trim quando la finestra perde il foreground. |
 
 ## 7. Riposo
 
 | Passo | Risultato atteso |
 | --- | --- |
 | Aprire Musify senza riprodurre e non toccare nulla per 30 s | La CPU resta a 0,0–0,3%; nessun redraw continuo. |
-| Controllare il Task Manager | Nessun thread di rete attivo in M4.5; il runtime Tokio non è ancora introdotto. |
+| Controllare il Task Manager | Nessun runtime di rete attivo a riposo: Tokio esiste solo durante una ricerca o uno stream online. |
 | Ridurre a icona e ripristinare | La UI si ridisegna solo quando serve. |
 
 ## Registro delle prove

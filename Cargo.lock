@@ -2232,6 +2232,8 @@ dependencies = [
 name = "musify-radio"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "image",
  "musify-core",
  "reqwest",
  "rusqlite",

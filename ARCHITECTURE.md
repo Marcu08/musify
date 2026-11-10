@@ -164,6 +164,22 @@ UI Fonti/Radio
   SMTC. La coda radio non viene salvata in `state.json` (solo i brani locali).
 - HLS non è implementato. Il seek è ignorato per gli stream.
 
+## Ridisegni e stream (M5.1)
+
+- Gli eventi di posizione arrivano ogni 200 ms. Il contatore dei frame ha
+  mostrato che durante la riproduzione Rune presenta a ~60 fps mentre i commit
+  logici sono pochi; a riposo i frame sono zero. Coalescing, `Tx::instant`,
+  `Tx::settle` e throttle dei wake sono stati provati e rimossi: nessun guadagno
+  CPU riproducibile. Il comportamento UI resta quello M5.
+- Le ricerche radio hanno un `request_id`; una ricerca nuova invalida quella
+  vecchia. La cache delle ricerche ha TTL (7 giorni di default) e le favicon
+  stanno in una cartella limitata a 256 file/16 MB.
+- La riconnessione HTTP incrementa una `generation`; il decoder Symphonia si
+  riapre da zero quando cambia, così Ogg non viene interpretato come
+  continuazione del vecchio stream.
+- HLS è rifiutato esplicitamente: richiederebbe playlist, segmenti TS/fMP4,
+  chiavi e gestione live, fuori dal perimetro dello streaming progressivo.
+
 ## Libreria locale (M2)
 
 ```text
@@ -214,6 +230,9 @@ cartelle musicali
 - **M5**: il core trasporta `SourceId`, non flussi o client HTTP. La radio
   preferisce stream progressivi MP3/AAC/Ogg e non HLS; Tokio non esiste finché
   non si apre una fonte online. I flussi non vengono mai scritti su disco.
+- **M5.1**: la CPU dei ridisegni è stata strumentata ma non ridotta in modo
+  riproducibile; le modifiche non provate sono state rimosse. Le cache radio
+  hanno TTL e limiti su disco, le ricerche sono cancellabili e HLS è rifiutato.
 
 ## Diagrammi di dettaglio
 

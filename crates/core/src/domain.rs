@@ -99,6 +99,7 @@ pub struct SourceItem {
     pub detail: String,
     pub uri: String,
     pub favorite: bool,
+    pub image_path: Option<PathBuf>,
 }
 
 /// An album row for the album grid.

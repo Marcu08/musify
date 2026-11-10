@@ -43,8 +43,14 @@ un commit preciso e confinata al crate `musify-ui`.
 - **Gapless**: i sample del brano successivo entrano nello stesso stream; il
   cambio metadati segue il confine di frame. Nessun crossfade.
 - **Radio internet**: sezione Fonti con Radio Browser (nome, paese, genere/tag),
-  preferiti locali, streaming MP3/AAC/Ogg con buffer adattivo, riconnessione,
-  metadati ICY e badge della fonte.
+  preferiti locali, streaming MP3/AAC/Ogg con buffer adattivo, riconnessione e
+  riapertura del decoder Ogg, metadati ICY, favicon in cache limitata e badge
+  della fonte. HLS non è supportato e viene rifiutato con un errore chiaro.
+- **Indagine CPU M5.1**: i ridisegni sono stati strumentati; durante la
+  riproduzione Rune presenta a ~60 fps mentre i commit logici sono pochi. Le
+  varianti provate (coalescing, `Tx::instant`, `Tx::settle`, wake throttling)
+  non hanno dato un guadagno riproducibile e sono state rimosse. Dettagli e
+  misure oneste in [M5.1](docs/M51-REPORT.md).
 - **Windows-native**: SMTC, overlay di Windows, tasti multimediali, dialog
   nativo per scegliere le cartelle.
 - **Persistenza**: coda, brano corrente e posizione in `state.json`; cartelle,
@@ -161,10 +167,10 @@ questa macchina.
 | Resampler sinc 44,1 → 48 kHz | **1,25% di un core** (lineare: 0,31%), 0 underrun | < 2% |
 | Libreria, 10.000 file | **8,51 s** prima scansione, **0,98 s** incrementale | — |
 | UI a riposo | **0,00% CPU** su 5 s, nessun redraw | zero wake-up |
-| UI in riproduzione locale | **7,49% di un core**, **0,62%** su 12 thread | < 2% |
-| Radio MP3 128 kbps | **8,57% di un core**, **0,71%** su 12 thread, +7,4 MB | < 2% |
-| Avvio app completa | **1,10 s** mediana (min 1,08, max 1,36) | < 300 ms |
-| RAM | **185 MB** working set a riposo, 187 MB locale, 195 MB radio | < 80 MB |
+| UI in riproduzione locale | **8,43% di un core**, **0,70%** su 12 thread | < 2% |
+| Radio MP3 128 kbps | **8,28% di un core**, **0,69%** su 12 thread | < 2% |
+| Avvio app completa | **1,15 s** mediana (min 1,11, max 2,11) | < 300 ms |
+| RAM | **185 MB** working set a riposo, 188 MB locale, 195 MB radio | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
 l'inizializzazione GPU sono la parte dominante. La UI a riposo non ridisegna.
@@ -183,6 +189,7 @@ i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
 | M4 — Windows, SMTC, persistenza | completata | [M4](docs/M4-WINDOWS-REPORT.md) |
 | M4.5 — Prestazioni e qualità locale | completata | [M4.5](docs/M45-REPORT.md) |
 | M5 — Fonti online e radio internet | completata (radio); Spotify no | [M5](docs/M5-RADIO-REPORT.md) |
+| M5.1 — Rifinitura CPU e radio | completata | [M5.1](docs/M51-REPORT.md) |
 
 ## Sviluppo
 

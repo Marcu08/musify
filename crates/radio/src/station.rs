@@ -102,6 +102,7 @@ impl Station {
             detail: self.tags.clone(),
             uri: self.stream_url().to_string(),
             favorite,
+            image_path: None,
         }
     }
 }

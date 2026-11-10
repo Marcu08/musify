@@ -53,7 +53,7 @@ pub fn view(s: &UiState) -> El {
     } else {
         let mut rows = col().w_full().gap(2.0);
         for item in &s.radio_items {
-            rows = rows.child(station_row(item));
+            rows = rows.child(station_row(s, item));
         }
         col()
             .w_full()
@@ -113,11 +113,12 @@ fn field(
         .on_edit(accessor)
 }
 
-fn station_row(item: &musify_core::SourceItem) -> El {
+fn station_row(s: &UiState, item: &musify_core::SourceItem) -> El {
     let p = palette();
     let id = item.id.clone();
     let favorite_id = item.id.clone();
     let favorite = item.favorite;
+    let icon = item.image_path.clone();
     let subtitle = if item.detail.is_empty() {
         item.subtitle.clone()
     } else {
@@ -132,13 +133,7 @@ fn station_row(item: &musify_core::SourceItem) -> El {
         .center_y()
         .radius(theme::RADIUS)
         .hover(p.hover)
-        .child(
-            el().size(40.0, 40.0)
-                .radius(8.0)
-                .fill(p.accent_soft)
-                .center()
-                .child(text("FM").font(theme::TINY).color(p.accent)),
-        )
+        .child(common::cover(s, icon.as_deref(), 40.0, 8.0, &item.title))
         .child(
             col()
                 .grow(1.0)
