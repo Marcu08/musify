@@ -189,7 +189,7 @@ i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
 | M4 — Windows, SMTC, persistenza | completata | [M4](docs/M4-WINDOWS-REPORT.md) |
 | M4.5 — Prestazioni e qualità locale | completata | [M4.5](docs/M45-REPORT.md) |
 | M5 — Fonti online e radio internet | completata (radio); Spotify no | [M5](docs/M5-RADIO-REPORT.md) |
-| M5.1 — Rifinitura CPU e radio | completata | [M5.1](docs/M51-REPORT.md) |
+| M5.1 — Rifinitura CPU e radio | radio completata; CPU non ridotta | [M5.1](docs/M51-REPORT.md) |
 
 ## Sviluppo
 
