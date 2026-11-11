@@ -5,6 +5,7 @@ members = [
     "crates/audio",
     "crates/core",
     "crates/library",
+    "crates/podcast",
     "crates/radio",
     "crates/ui",
 ]
@@ -22,6 +23,7 @@ musify-core = { path = "crates/core" }
 musify-audio = { path = "crates/audio" }
 musify-library = { path = "crates/library" }
 musify-radio = { path = "crates/radio" }
+musify-podcast = { path = "crates/podcast" }
 musify-ui = { path = "crates/ui" }
 
 anyhow = "1"
@@ -49,6 +51,9 @@ rayon = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 blake3 = "1"
 souvlaki = "0.9"
+feed-rs = "3"
+chrono = "0.4"
+url = "2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

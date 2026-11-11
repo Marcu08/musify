@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::{Album, Artist, SearchResults, SourceItem, Track, TrackSort};
+use crate::{Album, Artist, SearchResults, SourceEntry, SourceItem, Track, TrackSort};
 
 /// Search terms for an online source. `text` is the free-text query; filters
 /// are source-specific keys (`country`, `tag`, ...). The core never interprets
@@ -71,6 +71,38 @@ pub trait SourceProvider: Send + Sync {
     /// Optional cover/artwork. Called from a background thread; may download.
     fn artwork(&self, _id: &str) -> Result<Option<PathBuf>, SourceError> {
         Ok(None)
+    }
+
+    /// Entries inside a source item (for example podcast episodes).
+    fn entries(&self, _id: &str) -> Result<Vec<SourceEntry>, SourceError> {
+        Err(SourceError::Unsupported(
+            "this source has no entry list".into(),
+        ))
+    }
+
+    /// Fetch and store the latest entries. Called on a background thread only
+    /// after an explicit user action; sources must not poll in the background.
+    fn refresh(&self, id: &str) -> Result<Vec<SourceEntry>, SourceError> {
+        self.entries(id)
+    }
+
+    /// Resume position for an entry, when the source stores it.
+    fn resume_position(&self, _id: &str) -> Result<Option<Duration>, SourceError> {
+        Ok(None)
+    }
+
+    /// Persist playback progress and optionally the watched flag.
+    fn save_progress(
+        &self,
+        _id: &str,
+        _position: Duration,
+        _watched: bool,
+    ) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    fn set_watched(&self, _id: &str, _watched: bool) -> Result<(), SourceError> {
+        Ok(())
     }
 }
 

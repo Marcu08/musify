@@ -11,6 +11,7 @@ la UI comunica solo con comandi ed eventi.
 | `musify-audio` | decodifica (symphonia), output (cpal/WASAPI), coda, seek, volume | no |
 | `musify-library` | scanner (walkdir + lofty), indice SQLite, ricerca, cache copertine | no |
 | `musify-radio` | `SourceProvider` Radio Browser, cache e preferiti SQLite | no |
+| `musify-podcast` | `SourceProvider` iTunes Search, RSS, iscrizioni/episodi SQLite | no |
 | `musify-ui` | viste e input Rune; traduce gesti in `Command` e applica `Event` | sì |
 | `musify-app` | config, logging, registro fonti, SMTC, persistenza, coda | no |
 
@@ -117,6 +118,8 @@ UI (Rune, thread principale)
     con throttle 2 s e salvataggio alla chiusura.
   - Al riavvio i path vengono risolti con la libreria; la coda viene ripristinata
     con `Command::RestoreQueue`, che apre e prefill-a il brano ma resta in pausa.
+  - `podcasts.sqlite3`: iscrizioni, episodi, stato ascoltato e posizione di
+    ripresa per episodio. Non viene salvata la coda podcast in `state.json`.
 - **DPI**: Rune crea la prima finestra con lo scale iniziale; `on_ready` la
   ridimensiona/riposiziona. È un workaround circoscritto alla UI.
 
@@ -200,13 +203,56 @@ UI Fonti/Radio
   precarica al massimo otto artwork per risposta. La logica di rete e cache
   resta dentro il provider.
 - Il trait `ui::Backend` espone `source_search`, `source_favorites`,
-  `source_toggle_favorite` e `source_play`, tutti con lo schema come primo
-  argomento. La UI radio chiama gli stessi metodi con `"radio"`.
+  `source_toggle_favorite`, `source_play`, `source_entries`, `source_refresh` e
+  `source_set_watched`, tutti con lo schema come primo argomento. Le viste radio
+  e podcast chiamano gli stessi metodi con `"radio"` o `"podcast"`.
 - `backend.rs` è stato diviso in `backend/mod.rs` (cablaggio e tratti),
   `persistence.rs` (config TOML), `queue.rs` (`state.json`), `smtc.rs`
   (metadati Windows) e `sources.rs` (registro fonti).
 - Lo scheletro della seconda fonte e la relativa feature sono stati rimossi:
   nessuna fonte è dichiarata se non è implementata.
+
+## HTTP Range e podcast (M6.1)
+
+```text
+UI Podcast
+  ├─ source_search("podcast") ──▶ iTunes Search ──▶ SourceItem
+  ├─ source_entries/refresh ────▶ feed-rs (RSS) ──▶ SQLite (iscrizioni, episodi)
+  └─ source_play("podcast") ────▶ SourceProvider::resolve
+                                      │
+                                      ▼
+                     Command::PlayTrackAt (Track.source = podcast://audio-url)
+                                      │
+                         HttpStream StreamMode::OnDemand
+                         ├─ Content-Length + Accept-Ranges
+                         ├─ Seek → Range: bytes=<offset>-
+                         ├─ 206/416 e redirect gestiti
+                         └─ riconnessione dall’offset consegnato
+```
+
+- `HttpStream` ha due modalità: `Live` (radio, ICY, riconnessione dall’inizio)
+  e `OnDemand` (episodi finiti). In `OnDemand` legge `Content-Length` e
+  `Accept-Ranges`; `HttpReader::seek` invia una richiesta `Range` e aspetta la
+  nuova connessione. Se il server ignora o rifiuta Range, il lettore resta
+  riproducibile ma `is_seekable()` è falso.
+- La riconnessione di un `OnDemand` seekable riparte dai byte già consegnati
+  al decoder; un server non seekable interrompe invece lo stream invece di
+  riprodurre silenziosamente dall’inizio.
+- `musify-podcast` usa iTunes Search per la scoperta e `feed-rs` per RSS/Atom.
+  I feed malformati, gli enclosure mancanti e i redirect producono errori o
+  episodi saltati senza panic. Le richieste di rete avvengono solo su azione
+  esplicita: nessun polling.
+- SQLite `podcasts.sqlite3`: tabella `podcasts` (feed, metadati, iscrizione) e
+  `episodes` (guid, data, durata, enclosure, watched, position_ms). Gli
+  aggiornamenti del feed preservano watched e posizione.
+- La copertina è in `podcast-covers/<blake3>.jpg`, limitata a 64 file/8 MB;
+  viene passata a SMTC tramite `Track.cover_path`. Titolo episodio, autore,
+  album e durata sono già nel `Track`.
+- `Command::PlayTrackAt` apre l’episodio e applica la posizione di ripresa.
+  `AppBackend` salva la posizione ogni 2 s e su pausa/stop/chiusura; quando si
+  arriva a meno di 5 s dalla fine marca l’episodio come ascoltato.
+- La UI distingue radio e podcast: la radio mostra `LIVE`, il podcast mostra la
+  durata e abilita il seek solo dopo `SeekableChanged(true)`.
 
 ## Libreria locale (M2)
 

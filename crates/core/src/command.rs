@@ -8,6 +8,8 @@ use crate::{RepeatMode, Track};
 pub enum Command {
     /// Replace the queue with this track and start playing it.
     PlayTrack(Box<Track>),
+    /// Play one finite source item, resuming at `position`.
+    PlayTrackAt(Box<Track>, Duration),
     /// Replace the queue with these tracks and start at `start_index`.
     PlayTracks {
         tracks: Vec<Track>,

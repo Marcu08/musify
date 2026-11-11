@@ -36,6 +36,11 @@ impl SourceId {
     }
 
     #[must_use]
+    pub fn podcast(url: impl Into<String>) -> Self {
+        Self::new("podcast", url)
+    }
+
+    #[must_use]
     pub fn scheme(&self) -> &str {
         &self.scheme
     }
@@ -86,6 +91,12 @@ impl Track {
     pub fn is_local(&self) -> bool {
         self.source.is_local()
     }
+
+    /// Finite HTTP resources can seek and must not reconnect as live streams.
+    #[must_use]
+    pub fn is_on_demand(&self) -> bool {
+        self.source.scheme() == "podcast"
+    }
 }
 
 /// A result from an online source (radio, a remote library, ...) shown by the
@@ -100,6 +111,31 @@ pub struct SourceItem {
     pub uri: String,
     pub favorite: bool,
     pub image_path: Option<PathBuf>,
+}
+
+/// One entry (for example a podcast episode) inside a source item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceEntry {
+    pub id: String,
+    pub source: SourceId,
+    pub title: String,
+    pub subtitle: String,
+    pub detail: String,
+    pub uri: String,
+    pub duration: Option<Duration>,
+    /// Unix timestamp (seconds) of publication, when known.
+    pub published_at: Option<i64>,
+    pub watched: bool,
+    /// Saved resume position for this entry.
+    pub position: Option<Duration>,
+    pub image_path: Option<PathBuf>,
+}
+
+impl SourceEntry {
+    #[must_use]
+    pub fn progress(&self) -> Option<Duration> {
+        self.position.filter(|position| !position.is_zero())
+    }
 }
 
 /// An album row for the album grid.

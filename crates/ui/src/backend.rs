@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, RepeatMode, SearchResults,
-    SourceItem, SourceQuery, Track, TrackSort,
+    SourceEntry, SourceItem, SourceQuery, Track, TrackSort,
 };
 
 /// Everything the Rune layer needs from the application. The UI never sees cpal,
@@ -34,6 +34,13 @@ pub trait Backend: Send + Sync {
         Err("source is not available".into())
     }
     fn source_play(&self, _source: &str, _id: &str) {}
+    fn source_entries(&self, _source: &str, _id: &str) -> Result<Vec<SourceEntry>, String> {
+        Err("source entries are not available".into())
+    }
+    fn source_refresh(&self, _source: &str, _id: &str) {}
+    fn source_set_watched(&self, _source: &str, _id: &str, _watched: bool) -> Result<(), String> {
+        Err("source entries are not available".into())
+    }
 
     fn playback_settings(&self) -> (u16, bool, RepeatMode);
     fn output_info(&self) -> (u32, u16);

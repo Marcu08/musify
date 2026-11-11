@@ -3,7 +3,9 @@ use rune::{El, col, row, text};
 use crate::i18n;
 use crate::state::{UiState, View};
 use crate::theme::{self, palette};
-use crate::view::{albums, artists, common, queue, radio, search, settings, sources, tracks};
+use crate::view::{
+    albums, artists, common, podcast, queue, radio, search, settings, sources, tracks,
+};
 
 pub fn view(s: &UiState) -> El {
     let content = if !s.query.text.trim().is_empty() {
@@ -16,6 +18,7 @@ pub fn view(s: &UiState) -> El {
             View::Queue => queue::view(s),
             View::Sources => sources::view(s),
             View::Radio => radio::view(s),
+            View::Podcast => podcast::view(s),
             View::Settings => settings::view(s),
         }
     };

@@ -2,6 +2,7 @@ param(
     [string]$Output = "docs/M45-BASELINE.md",
     [string]$Label = "M4.5 — Baseline prestazioni",
     [string]$RadioUrl = "",
+    [string]$PodcastUrl = "",
     [int]$Runs = 10,
     [switch]$NoSmtc,
     [switch]$SkipBuild
@@ -111,12 +112,19 @@ function Invoke-Run([bool]$Autoplay) {
     if ($RadioUrl) {
         $env:MUSIFY_AUTOPLAY_RADIO = $RadioUrl
         Remove-Item Env:MUSIFY_AUTOPLAY -ErrorAction SilentlyContinue
+        Remove-Item Env:MUSIFY_AUTOPLAY_PODCAST -ErrorAction SilentlyContinue
+    } elseif ($PodcastUrl) {
+        $env:MUSIFY_AUTOPLAY_PODCAST = $PodcastUrl
+        Remove-Item Env:MUSIFY_AUTOPLAY -ErrorAction SilentlyContinue
+        Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
     } elseif ($Autoplay) {
         Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
+        Remove-Item Env:MUSIFY_AUTOPLAY_PODCAST -ErrorAction SilentlyContinue
         $env:MUSIFY_AUTOPLAY = "1"
     } else {
         Remove-Item Env:MUSIFY_AUTOPLAY -ErrorAction SilentlyContinue
         Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
+        Remove-Item Env:MUSIFY_AUTOPLAY_PODCAST -ErrorAction SilentlyContinue
     }
     Reset-Ready
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -238,6 +246,8 @@ $playRuns = @()
 
 if ($RadioUrl) {
     Write-Host "M4.5 benchmark radio: $Runs avvii con $RadioUrl"
+} elseif ($PodcastUrl) {
+    Write-Host "M4.5 benchmark podcast: $Runs avvii con $PodcastUrl"
 } else {
     Write-Host "M4.5 benchmark: $Runs avvii di startup + $Runs avvii in riproduzione"
     for ($i = 1; $i -le $Runs; $i++) {
@@ -251,6 +261,7 @@ for ($i = 1; $i -le $Runs; $i++) {
     $playRuns += Invoke-Run $true
 }
 Remove-Item Env:MUSIFY_AUTOPLAY_RADIO -ErrorAction SilentlyContinue
+Remove-Item Env:MUSIFY_AUTOPLAY_PODCAST -ErrorAction SilentlyContinue
 
 $idleReady = @($idleRuns | ForEach-Object { $_.ReadyMs })
 $idleWall = @($idleRuns | ForEach-Object { $_.WallMs })
@@ -273,6 +284,7 @@ Rust: ``$rustc``
 Build: release, ``$([System.IO.Path]::GetFileName($exe))``
 SMTC: $(if ($NoSmtc) { "disattivato (MUSIFY_NO_SMTC=1)" } else { "attivo" })
 Radio: $(if ($RadioUrl) { $RadioUrl } else { "non attiva" })
+Podcast: $(if ($PodcastUrl) { $PodcastUrl } else { "non attivo" })
 Metodo: 10 avvii, segnale ``RUNE_READY_DIR``, 2 s di assestamento, 5 s di campionamento CPU.
 Il "ready" di Rune arriva dopo il primo frame e il ritorno di ``on_ready``; non è il primo pixel puro.
 

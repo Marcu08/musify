@@ -16,11 +16,20 @@ const INITIAL_TARGET: usize = 128 * 1024;
 const MAX_TARGET: usize = 1024 * 1024;
 const START_THRESHOLD: usize = 16 * 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
+const SEEK_TIMEOUT: Duration = Duration::from_secs(20);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-/// A live HTTP stream with auto-reconnect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamMode {
+    /// Endless stream: reconnect from the beginning, no seek.
+    Live,
+    /// Finite resource: detect Range support and seek by byte offset.
+    OnDemand,
+}
+
+/// An HTTP stream with optional byte-range support.
 ///
 /// The network thread owns a small Tokio runtime that exists only while the
 /// stream exists. Bytes are buffered ahead of the decoder; the buffer target
@@ -34,6 +43,7 @@ struct Shared {
     state: Mutex<State>,
     ready: Condvar,
     updates: Mutex<VecDeque<StreamEvent>>,
+    seek_signal: tokio::sync::Notify,
 }
 
 struct State {
@@ -45,12 +55,20 @@ struct State {
     status: StreamStatus,
     title: Option<String>,
     stopped: bool,
+    finished: bool,
     generation: u64,
     connections: u32,
+    mode: StreamMode,
+    content_length: Option<u64>,
+    seekable: bool,
+    /// Byte offset of the next byte that will be handed to the decoder.
+    delivered: u64,
+    seek_request: Option<u64>,
+    seek_result: Option<Result<u64, String>>,
 }
 
 impl HttpStream {
-    pub fn start(url: String) -> Self {
+    pub fn start(url: String, mode: StreamMode) -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 buffer: VecDeque::with_capacity(INITIAL_TARGET),
@@ -61,18 +79,26 @@ impl HttpStream {
                 status: StreamStatus::Connecting,
                 title: None,
                 stopped: false,
+                finished: false,
                 generation: 1,
                 connections: 0,
+                mode,
+                content_length: None,
+                seekable: false,
+                delivered: 0,
+                seek_request: None,
+                seek_result: None,
             }),
             ready: Condvar::new(),
             updates: Mutex::new(VecDeque::new()),
+            seek_signal: tokio::sync::Notify::new(),
         });
         let stop = Arc::new(AtomicBool::new(false));
         let thread_shared = Arc::clone(&shared);
         let thread_stop = Arc::clone(&stop);
         if let Err(error) = thread::Builder::new()
-            .name("musify-radio-stream".into())
-            .spawn(move || run_stream(url, thread_shared, thread_stop))
+            .name("musify-stream".into())
+            .spawn(move || run_stream(url, thread_shared, thread_stop, mode))
         {
             let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
             state.first_error = Some(format!("cannot start the stream thread: {error}"));
@@ -106,7 +132,7 @@ impl HttpStream {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(AudioError::Decode(
-                    "the radio stream did not send data within 15 seconds".into(),
+                    "the stream did not send data within 15 seconds".into(),
                 ));
             }
             let (next, timeout) = self
@@ -117,7 +143,7 @@ impl HttpStream {
             state = next;
             if timeout.timed_out() && !state.ready {
                 return Err(AudioError::Decode(
-                    "the radio stream did not send data within 15 seconds".into(),
+                    "the stream did not send data within 15 seconds".into(),
                 ));
             }
         }
@@ -138,6 +164,23 @@ impl HttpStream {
             .unwrap_or_else(|p| p.into_inner())
             .content_type
             .clone()
+    }
+
+    pub fn is_seekable(&self) -> bool {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .seekable
+    }
+
+    #[cfg(test)]
+    pub fn content_length(&self) -> Option<u64> {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .content_length
     }
 
     pub fn take_updates(&self) -> Vec<StreamEvent> {
@@ -178,6 +221,7 @@ impl Read for HttpReader {
                 for slot in &mut buf[..count] {
                     *slot = state.buffer.pop_front().unwrap_or(0);
                 }
+                state.delivered = state.delivered.saturating_add(count as u64);
                 drop(state);
                 self.shared.ready.notify_all();
                 return Ok(count);
@@ -187,7 +231,7 @@ impl Read for HttpReader {
             {
                 return Err(io::Error::other(error.clone()));
             }
-            if state.stopped || self.stop.load(Ordering::Acquire) {
+            if state.finished || state.stopped || self.stop.load(Ordering::Acquire) {
                 return Ok(0);
             }
             // The decoder is starving: ask the producer for a larger lead.
@@ -205,25 +249,94 @@ impl Read for HttpReader {
 }
 
 impl Seek for HttpReader {
-    fn seek(&mut self, _pos: SeekFrom) -> io::Result<u64> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "a live radio stream is not seekable",
-        ))
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.mode != StreamMode::OnDemand || !state.seekable {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "this HTTP stream is not seekable",
+            ));
+        }
+        let current = state.delivered;
+        let target = match pos {
+            SeekFrom::Start(offset) => offset,
+            SeekFrom::Current(delta) => current.saturating_add_signed(delta),
+            SeekFrom::End(delta) => {
+                let length = state.content_length.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Unsupported, "unknown content length")
+                })?;
+                length.saturating_add_signed(delta)
+            }
+        };
+        if state.content_length.is_some_and(|length| target > length) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek position is outside the stream",
+            ));
+        }
+        if target == current {
+            return Ok(current);
+        }
+        state.seek_request = Some(target);
+        state.seek_result = None;
+        state.first_error = None;
+        state.finished = false;
+        state.buffer.clear();
+        drop(state);
+        self.shared.ready.notify_all();
+        self.shared.seek_signal.notify_one();
+
+        let deadline = Instant::now() + SEEK_TIMEOUT;
+        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if let Some(result) = state.seek_result.take() {
+                return match result {
+                    Ok(offset) => Ok(offset),
+                    Err(error) => Err(io::Error::other(error)),
+                };
+            }
+            if state.stopped || self.stop.load(Ordering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "the stream stopped during the seek",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the HTTP range request timed out",
+                ));
+            }
+            let (next, _) = self
+                .shared
+                .ready
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|p| p.into_inner());
+            state = next;
+        }
     }
 }
 
 impl MediaSource for HttpReader {
     fn is_seekable(&self) -> bool {
-        false
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .seekable
     }
 
     fn byte_len(&self) -> Option<u64> {
-        None
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .content_length
     }
 }
 
-fn run_stream(url: String, shared: Arc<Shared>, stop: Arc<AtomicBool>) {
+fn run_stream(url: String, shared: Arc<Shared>, stop: Arc<AtomicBool>, mode: StreamMode) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -255,19 +368,72 @@ fn run_stream(url: String, shared: Arc<Shared>, stop: Arc<AtomicBool>) {
             if stop.load(Ordering::Acquire) {
                 return;
             }
-            let status = if attempt == 0 {
+            let pending_seek = shared
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .seek_request
+                .is_some();
+            let status = if pending_seek {
+                StreamStatus::Buffering
+            } else if attempt == 0 {
                 StreamStatus::Connecting
             } else {
                 StreamStatus::Reconnecting { attempt }
             };
             set_status(&shared, status);
-            match read_once(&client, &url, &shared, &stop).await {
-                Ok(()) if stop.load(Ordering::Acquire) => return,
-                Ok(()) => set_status(
-                    &shared,
-                    StreamStatus::Error("the radio stream ended".into()),
-                ),
-                Err(error) => set_status(&shared, StreamStatus::Error(error)),
+            match read_once(&client, &url, &shared, &stop, mode).await {
+                Ok(ReadOutcome::Seek) => {
+                    attempt = 0;
+                    continue;
+                }
+                Ok(ReadOutcome::Stopped) => {
+                    mark_finished(&shared);
+                    return;
+                }
+                Ok(ReadOutcome::Ended) => {
+                    mark_finished(&shared);
+                    // Keep the thread alive so a seek after EOF can reopen a
+                    // Range request without creating a new stream.
+                    loop {
+                        if stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        if shared
+                            .state
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .seek_request
+                            .is_some()
+                        {
+                            break;
+                        }
+                        let _ = tokio::time::timeout(
+                            Duration::from_millis(500),
+                            shared.seek_signal.notified(),
+                        )
+                        .await;
+                    }
+                    if let Ok(mut state) = shared.state.lock() {
+                        state.finished = false;
+                    }
+                    attempt = 0;
+                    continue;
+                }
+                Err(error) => {
+                    let (seekable, delivered) = {
+                        let state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+                        (state.seekable, state.delivered)
+                    };
+                    if mode == StreamMode::OnDemand && !seekable && delivered > 0 {
+                        // Without Range support a resumed byte offset cannot be
+                        // satisfied; stop instead of silently replaying from 0.
+                        set_status(&shared, StreamStatus::Error(error));
+                        mark_finished(&shared);
+                        return;
+                    }
+                    set_status(&shared, StreamStatus::Error(error));
+                }
             }
             attempt = attempt.saturating_add(1);
             if attempt >= 6 {
@@ -284,22 +450,50 @@ fn run_stream(url: String, shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     });
 }
 
+enum ReadOutcome {
+    Seek,
+    Stopped,
+    Ended,
+}
+
 async fn read_once(
     client: &reqwest::Client,
     url: &str,
     shared: &Arc<Shared>,
     stop: &Arc<AtomicBool>,
-) -> Result<(), String> {
-    let response = client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "audio/*")
-        .header("Icy-MetaData", "1")
-        .send()
-        .await
-        .map_err(|error| format!("cannot connect: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!("the stream answered HTTP {}", response.status()));
+    mode: StreamMode,
+) -> Result<ReadOutcome, String> {
+    let (start_offset, from_seek) = {
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let from_seek = state.seek_request.is_some();
+        let offset = if let Some(target) = state.seek_request.take() {
+            target
+        } else if mode == StreamMode::OnDemand && state.seekable && state.connections > 0 {
+            state.delivered
+        } else {
+            0
+        };
+        (offset, from_seek)
+    };
+
+    let mut request = client.get(url).header(reqwest::header::ACCEPT, "audio/*");
+    if mode == StreamMode::Live {
+        request = request.header("Icy-MetaData", "1");
     }
+    if start_offset > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={start_offset}-"));
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            if from_seek {
+                let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+                state.seek_request = Some(start_offset);
+            }
+            return Err(format!("cannot connect: {error}"));
+        }
+    };
+    let status = response.status();
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -310,11 +504,120 @@ async fn read_once(
         .get("icy-metaint")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<usize>().ok());
+    let accepts_ranges = response
+        .headers()
+        .get(reqwest::header::ACCEPT_RANGES)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("bytes"));
+    let content_range = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range);
+    let mut content_length = response.content_length();
+    let seekable;
+
+    if status == reqwest::StatusCode::PARTIAL_CONTENT {
+        seekable = mode == StreamMode::OnDemand;
+        if let Some((range_start, total)) = content_range {
+            if start_offset > 0 && range_start != start_offset {
+                if from_seek {
+                    set_seek_result(
+                        shared,
+                        Err(format!(
+                            "the server resumed at byte {range_start}, expected {start_offset}"
+                        )),
+                    );
+                }
+                return Ok(ReadOutcome::Stopped);
+            }
+            if let Some(total) = total {
+                content_length = Some(total);
+            }
+        }
+    } else if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        if from_seek {
+            set_seek_result(shared, Err("the server rejected the range request".into()));
+        }
+        return Ok(ReadOutcome::Stopped);
+    } else if status.is_success() {
+        let mut effective_start = start_offset;
+        if start_offset > 0 {
+            // The server ignored Range: fall back to a full response only when
+            // this was a reconnect; a user seek must fail explicitly.
+            if from_seek {
+                if let Ok(mut state) = shared.state.lock() {
+                    state.seekable = false;
+                }
+                set_seek_result(
+                    shared,
+                    Err("the server does not support HTTP range requests".into()),
+                );
+                return Ok(ReadOutcome::Stopped);
+            }
+            effective_start = 0;
+        }
+        seekable = mode == StreamMode::OnDemand && accepts_ranges && content_length.is_some();
+        if effective_start != start_offset {
+            return read_body(
+                response,
+                shared,
+                stop,
+                mode,
+                effective_start,
+                content_length,
+                seekable,
+                content_type,
+                metaint,
+                from_seek,
+            )
+            .await;
+        }
+    } else {
+        return Err(format!("the stream answered HTTP {status}"));
+    }
+
+    read_body(
+        response,
+        shared,
+        stop,
+        mode,
+        start_offset,
+        content_length,
+        seekable,
+        content_type,
+        metaint,
+        from_seek,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn read_body(
+    response: reqwest::Response,
+    shared: &Arc<Shared>,
+    stop: &Arc<AtomicBool>,
+    mode: StreamMode,
+    start_offset: u64,
+    content_length: Option<u64>,
+    seekable: bool,
+    content_type: Option<String>,
+    metaint: Option<usize>,
+    from_seek: bool,
+) -> Result<ReadOutcome, String> {
     {
         let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
         state.content_type.clone_from(&content_type);
+        state.content_length = content_length;
+        state.seekable = seekable;
+        state.finished = false;
         state.connections = state.connections.saturating_add(1);
-        if state.connections > 1 {
+        state.delivered = start_offset;
+        if from_seek {
+            state.seek_request = None;
+            state.seek_result = Some(Ok(start_offset));
+            state.buffer.clear();
+        } else if state.connections > 1 {
             // A new connection restarts the transport. The decoder must not
             // parse the new stream as a continuation of the old one; clearing
             // the buffer and bumping the generation makes it reopen.
@@ -325,23 +628,43 @@ async fn read_once(
     shared.ready.notify_all();
     set_status(shared, StreamStatus::Buffering);
 
-    let mut parser = IcyParser::new(metaint);
+    let mut parser = IcyParser::new(if mode == StreamMode::Live {
+        metaint
+    } else {
+        None
+    });
     let mut stream = response.bytes_stream();
+    let mut received = 0u64;
     loop {
+        if stop.load(Ordering::Acquire) {
+            return Ok(ReadOutcome::Stopped);
+        }
+        if shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .seek_request
+            .is_some()
+        {
+            return Ok(ReadOutcome::Seek);
+        }
         let chunk = match tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
             Ok(Some(chunk)) => chunk,
-            Ok(None) => return Err("the server closed the stream".into()),
-            Err(_) => {
-                if stop.load(Ordering::Acquire) {
-                    return Ok(());
+            Ok(None) => {
+                if mode == StreamMode::OnDemand
+                    && content_length.is_some_and(|length| start_offset + received >= length)
+                {
+                    return Ok(ReadOutcome::Ended);
                 }
-                continue;
+                return Err("the server closed the stream".into());
             }
+            Err(_) => continue,
         };
         if stop.load(Ordering::Acquire) {
-            return Ok(());
+            return Ok(ReadOutcome::Stopped);
         }
         let chunk = chunk.map_err(|error| format!("network read failed: {error}"))?;
+        received = received.saturating_add(chunk.len() as u64);
         let mut audio = Vec::with_capacity(chunk.len());
         let mut title = None;
         parser.feed(
@@ -357,6 +680,20 @@ async fn read_once(
         if !audio.is_empty() {
             push_audio(shared, stop, &audio)?;
         }
+        if shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .seek_request
+            .is_some()
+        {
+            return Ok(ReadOutcome::Seek);
+        }
+        if mode == StreamMode::OnDemand
+            && content_length.is_some_and(|length| start_offset + received >= length)
+        {
+            return Ok(ReadOutcome::Ended);
+        }
     }
 }
 
@@ -364,7 +701,7 @@ fn push_audio(shared: &Arc<Shared>, stop: &Arc<AtomicBool>, bytes: &[u8]) -> Res
     let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
     let mut offset = 0;
     while offset < bytes.len() {
-        if stop.load(Ordering::Acquire) || state.stopped {
+        if stop.load(Ordering::Acquire) || state.stopped || state.seek_request.is_some() {
             return Ok(());
         }
         let free = state.target.saturating_sub(state.buffer.len());
@@ -392,6 +729,29 @@ fn push_audio(shared: &Arc<Shared>, stop: &Arc<AtomicBool>, bytes: &[u8]) -> Res
         set_status(shared, StreamStatus::Playing);
     }
     Ok(())
+}
+
+fn mark_finished(shared: &Arc<Shared>) {
+    let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+    state.finished = true;
+    shared.ready.notify_all();
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let value = value.trim();
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, _end) = range.split_once('-')?;
+    let start = start.trim().parse().ok()?;
+    let total = total.trim().parse().ok();
+    Some((start, total))
+}
+
+fn set_seek_result(shared: &Arc<Shared>, result: Result<u64, String>) {
+    let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+    state.seek_request = None;
+    state.seek_result = Some(result);
+    shared.ready.notify_all();
 }
 
 fn set_status(shared: &Arc<Shared>, status: StreamStatus) {
@@ -628,7 +988,7 @@ mod tests {
             }
         });
 
-        let stream = HttpStream::start(url);
+        let stream = HttpStream::start(url, StreamMode::Live);
         let content_type = stream.wait_ready().expect("ready");
         assert_eq!(content_type.as_deref(), Some("audio/mpeg"));
         let mut reader = stream.reader();
@@ -676,5 +1036,198 @@ mod tests {
             "the stream should have reconnected"
         );
         server.join().expect("server thread");
+    }
+
+    struct RangeServer {
+        address: std::net::SocketAddr,
+        stop: Arc<AtomicBool>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl RangeServer {
+        fn start(body: Vec<u8>, ranges: bool, close_after: Option<usize>) -> Self {
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind range server");
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
+            let address = listener.local_addr().expect("addr");
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_stop = Arc::clone(&stop);
+            let thread = thread::spawn(move || {
+                while !thread_stop.load(Ordering::Acquire) {
+                    let (mut socket, _) = match listener.accept() {
+                        Ok(connection) => connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                        Err(_) => return,
+                    };
+                    let _ = socket.set_nonblocking(false);
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        use std::io::Read;
+                        if socket.read(&mut byte).unwrap_or(0) == 0 {
+                            break;
+                        }
+                        request.push(byte[0]);
+                    }
+                    let text = String::from_utf8_lossy(&request);
+                    let start = text
+                        .lines()
+                        .find_map(|line| {
+                            let line = line.to_ascii_lowercase();
+                            line.strip_prefix("range: bytes=")
+                                .and_then(|value| value.split('-').next())
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    use std::io::Write;
+                    if ranges && start > 0 {
+                        if start >= body.len() {
+                            socket
+                                .write_all(
+                                    b"HTTP/1.1 416 Range Not Satisfiable\r\n\
+                                      Content-Range: bytes */0\r\n\
+                                      Content-Length: 0\r\n\r\n",
+                                )
+                                .expect("416");
+                            continue;
+                        }
+                        let header = format!(
+                            "HTTP/1.1 206 Partial Content\r\n\
+                             Content-Type: audio/mpeg\r\n\
+                             Accept-Ranges: bytes\r\n\
+                             Content-Range: bytes {start}-{}/{}\r\n\
+                             Content-Length: {}\r\n\r\n",
+                            body.len() - 1,
+                            body.len(),
+                            body.len() - start
+                        );
+                        socket.write_all(header.as_bytes()).expect("headers");
+                        let chunk = &body[start..];
+                        let count = close_after.unwrap_or(chunk.len()).min(chunk.len());
+                        socket.write_all(&chunk[..count]).expect("body");
+                    } else {
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: audio/mpeg\r\n\
+                             Accept-Ranges: {}\r\n\
+                             Content-Length: {}\r\n\r\n",
+                            if ranges { "bytes" } else { "none" },
+                            body.len()
+                        );
+                        socket.write_all(header.as_bytes()).expect("headers");
+                        let count = close_after.unwrap_or(body.len()).min(body.len());
+                        socket.write_all(&body[..count]).expect("body");
+                    }
+                    socket.flush().expect("flush");
+                    drop(socket);
+                }
+            });
+            Self {
+                address,
+                stop,
+                thread: Some(thread),
+            }
+        }
+
+        fn url(&self) -> String {
+            format!("http://{}/episode.mp3", self.address)
+        }
+
+        fn join(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn read_exact_len(reader: &mut HttpReader, len: usize, timeout: Duration) -> Vec<u8> {
+        let deadline = Instant::now() + timeout;
+        let mut out = Vec::new();
+        while out.len() < len && Instant::now() < deadline {
+            let mut buffer = [0u8; 64];
+            let remaining = (len - out.len()).min(buffer.len());
+            match reader.read(&mut buffer[..remaining]) {
+                Ok(0) => break,
+                Ok(count) => out.extend_from_slice(&buffer[..count]),
+                Err(error) => panic!("read failed: {error}"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn range_requests_resume_from_the_byte_offset() {
+        let body: Vec<u8> = (0..1024).map(|value| (value % 251) as u8).collect();
+        let mut server = RangeServer::start(body.clone(), true, None);
+        let stream = HttpStream::start(server.url(), StreamMode::OnDemand);
+        stream.wait_ready().expect("ready");
+        assert!(stream.is_seekable());
+        assert_eq!(stream.content_length(), Some(body.len() as u64));
+
+        let mut reader = stream.reader();
+        let first = read_exact_len(&mut reader, 64, Duration::from_secs(5));
+        assert_eq!(first, body[..64]);
+        let offset = reader.seek(SeekFrom::Start(400)).expect("seek");
+        assert_eq!(offset, 400);
+        let rest = read_exact_len(&mut reader, 64, Duration::from_secs(5));
+        assert_eq!(rest, body[400..464]);
+        drop(stream);
+        server.join();
+    }
+
+    #[test]
+    fn a_server_without_range_support_stays_playable_but_not_seekable() {
+        let body: Vec<u8> = (0..512).map(|value| (value % 97) as u8).collect();
+        let mut server = RangeServer::start(body.clone(), false, None);
+        let stream = HttpStream::start(server.url(), StreamMode::OnDemand);
+        stream.wait_ready().expect("ready");
+        assert!(!stream.is_seekable());
+        let mut reader = stream.reader();
+        let samples = read_exact_len(&mut reader, 64, Duration::from_secs(5));
+        assert_eq!(samples, body[..64]);
+        let error = reader
+            .seek(SeekFrom::Start(100))
+            .expect_err("non-seekable stream");
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        drop(stream);
+        server.join();
+    }
+
+    #[test]
+    fn a_range_request_rejected_with_416_fails_the_seek() {
+        let body: Vec<u8> = (0..256).map(|value| value as u8).collect();
+        let mut server = RangeServer::start(body.clone(), true, None);
+        let stream = HttpStream::start(server.url(), StreamMode::OnDemand);
+        stream.wait_ready().expect("ready");
+        let mut reader = stream.reader();
+        let _ = read_exact_len(&mut reader, 16, Duration::from_secs(5));
+        let error = reader
+            .seek(SeekFrom::Start(body.len() as u64))
+            .expect_err("out of range seek");
+        assert!(error.to_string().contains("range"));
+        drop(stream);
+        server.join();
+    }
+
+    #[test]
+    fn a_dropped_range_stream_reconnects_from_the_delivered_offset() {
+        let body: Vec<u8> = (0..1024).map(|value| (value % 233) as u8).collect();
+        let mut server = RangeServer::start(body.clone(), true, Some(200));
+        let stream = HttpStream::start(server.url(), StreamMode::OnDemand);
+        stream.wait_ready().expect("ready");
+        let mut reader = stream.reader();
+        let first = read_exact_len(&mut reader, 100, Duration::from_secs(5));
+        assert_eq!(first, body[..100]);
+        let rest = read_exact_len(&mut reader, 300, Duration::from_secs(10));
+        assert_eq!(rest, body[100..400]);
+        assert!(stream.generation() >= 2, "range reconnect expected");
+        drop(stream);
+        server.join();
     }
 }

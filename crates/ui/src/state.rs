@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, QueueItem,
-    QueueItemId, RepeatMode, SearchResults, SourceItem, SourceQuery, StreamStatus, Track, TrackId,
-    TrackSort,
+    QueueItemId, RepeatMode, SearchResults, SourceEntry, SourceItem, SourceQuery, StreamStatus,
+    Track, TrackId, TrackSort,
 };
 use rune::{Image, ImageCache, Key, KeyEvent, TextEdit, Tx, Waker};
 
@@ -22,6 +22,7 @@ pub enum View {
     Queue,
     Sources,
     Radio,
+    Podcast,
     Settings,
 }
 
@@ -152,8 +153,17 @@ pub struct UiState {
     pub source_keys: Vec<String>,
     pub source_loading: bool,
     pub source_offline: bool,
+    pub podcast_query: TextEdit,
+    pub podcast_items: Vec<SourceItem>,
+    pub podcast_keys: Vec<String>,
+    pub podcast_loading: bool,
+    pub podcast_selected: Option<String>,
+    pub podcast_selected_title: String,
+    pub podcast_entries: Vec<SourceEntry>,
+    pub podcast_entries_loading: bool,
     pub stream_title: Option<String>,
     pub stream_status: StreamStatus,
+    pub seekable: bool,
 }
 
 impl UiState {
@@ -196,8 +206,17 @@ impl UiState {
             source_keys: Vec::new(),
             source_loading: false,
             source_offline: false,
+            podcast_query: TextEdit::default(),
+            podcast_items: Vec::new(),
+            podcast_keys: Vec::new(),
+            podcast_loading: false,
+            podcast_selected: None,
+            podcast_selected_title: String::new(),
+            podcast_entries: Vec::new(),
+            podcast_entries_loading: false,
             stream_title: None,
             stream_status: StreamStatus::Idle,
+            seekable: true,
         };
         state.reload();
         state
@@ -307,6 +326,9 @@ impl UiState {
         if view == View::Radio {
             self.refresh_source_favorites("radio");
         }
+        if view == View::Podcast {
+            self.refresh_podcast_subscriptions();
+        }
     }
 
     pub fn refresh_source_favorites(&mut self, source: &str) {
@@ -365,6 +387,90 @@ impl UiState {
 
     pub fn play_source(&mut self, source: &str, id: &str) {
         self.backend.source_play(source, id);
+    }
+
+    pub fn refresh_podcast_subscriptions(&mut self) {
+        match self.backend.source_favorites("podcast") {
+            Ok(items) => self.set_podcast_items(items),
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn search_podcasts(&mut self) {
+        let text = self.podcast_query.text.trim().to_string();
+        if text.is_empty() {
+            self.refresh_podcast_subscriptions();
+            return;
+        }
+        self.podcast_loading = true;
+        self.backend.source_search(
+            "podcast",
+            SourceQuery {
+                text,
+                ..SourceQuery::default()
+            },
+        );
+    }
+
+    fn set_podcast_items(&mut self, items: Vec<SourceItem>) {
+        self.podcast_keys = items
+            .iter()
+            .map(|item| format!("{}-{}", item.source.scheme(), item.id))
+            .collect();
+        self.podcast_items = items;
+    }
+
+    pub fn toggle_podcast_subscription(&mut self, id: &str) {
+        match self.backend.source_toggle_favorite("podcast", id) {
+            Ok(subscribed) => {
+                if let Some(item) = self.podcast_items.iter_mut().find(|item| item.id == id) {
+                    item.favorite = subscribed;
+                }
+                self.list_version = self.list_version.wrapping_add(1);
+                if subscribed {
+                    self.refresh_podcast(id);
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn open_podcast(&mut self, id: &str) {
+        self.podcast_selected = Some(id.to_string());
+        self.podcast_selected_title = self
+            .podcast_items
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.title.clone())
+            .unwrap_or_else(|| "Podcast".to_string());
+        self.podcast_entries.clear();
+        self.podcast_entries_loading = true;
+        match self.backend.source_entries("podcast", id) {
+            Ok(entries) => self.podcast_entries = entries,
+            Err(error) => self.error = Some(error),
+        }
+        self.backend.source_refresh("podcast", id);
+    }
+
+    pub fn refresh_podcast(&mut self, id: &str) {
+        self.podcast_entries_loading = true;
+        self.backend.source_refresh("podcast", id);
+    }
+
+    pub fn play_podcast_entry(&mut self, id: &str) {
+        self.backend.source_play("podcast", id);
+    }
+
+    pub fn toggle_podcast_watched(&mut self, id: &str, watched: bool) {
+        match self.backend.source_set_watched("podcast", id, watched) {
+            Ok(()) => {
+                if let Some(entry) = self.podcast_entries.iter_mut().find(|entry| entry.id == id) {
+                    entry.watched = watched;
+                }
+                self.list_version = self.list_version.wrapping_add(1);
+            }
+            Err(error) => self.error = Some(error),
+        }
     }
 
     pub fn open_album(&mut self, album_id: AlbumId) {
@@ -486,11 +592,7 @@ impl UiState {
     }
 
     pub fn seek_fraction(&mut self, fraction: f32) {
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|item| !item.track.is_local())
-        {
+        if !self.seekable {
             return;
         }
         let duration = self
@@ -506,11 +608,7 @@ impl UiState {
     }
 
     pub fn seek_relative(&mut self, seconds: f64) {
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|item| !item.track.is_local())
-        {
+        if !self.seekable {
             return;
         }
         let duration = self
@@ -623,6 +721,7 @@ impl UiState {
                 } else {
                     StreamStatus::Connecting
                 };
+                self.seekable = item.track.is_local();
                 self.current = Some(item);
                 true
             }
@@ -631,6 +730,7 @@ impl UiState {
                 self.duration = None;
                 self.stream_title = None;
                 self.stream_status = StreamStatus::Idle;
+                self.seekable = true;
                 true
             }
             Event::PositionChanged { position, duration } => {
@@ -690,6 +790,12 @@ impl UiState {
                 items,
                 offline,
             } => {
+                if source == "podcast" {
+                    self.podcast_loading = false;
+                    self.set_podcast_items(items);
+                    self.list_version = self.list_version.wrapping_add(1);
+                    return true;
+                }
                 if source != "radio" {
                     return false;
                 }
@@ -704,6 +810,11 @@ impl UiState {
                 request_id: _,
                 message,
             } => {
+                if source == "podcast" {
+                    self.podcast_loading = false;
+                    self.error = Some(message);
+                    return true;
+                }
                 if source != "radio" {
                     return false;
                 }
@@ -711,7 +822,35 @@ impl UiState {
                 self.error = Some(message);
                 true
             }
+            Event::SeekableChanged(seekable) => {
+                if self.seekable == seekable {
+                    return false;
+                }
+                self.seekable = seekable;
+                true
+            }
+            Event::SourceEntries { source, id, result } => {
+                if source != "podcast" || self.podcast_selected.as_deref() != Some(id.as_str()) {
+                    return false;
+                }
+                self.podcast_entries_loading = false;
+                match result {
+                    Ok(entries) => self.podcast_entries = entries,
+                    Err(message) => self.error = Some(message),
+                }
+                self.list_version = self.list_version.wrapping_add(1);
+                true
+            }
             Event::SourceArtwork { source, id, path } => {
+                if source == "podcast" {
+                    let Some(item) = self.podcast_items.iter_mut().find(|item| item.id == id)
+                    else {
+                        return false;
+                    };
+                    item.image_path = Some(path);
+                    self.list_version = self.list_version.wrapping_add(1);
+                    return true;
+                }
                 if source != "radio" {
                     return false;
                 }
@@ -839,6 +978,7 @@ pub fn scenes() -> &'static [Scene] {
         ("artists", scene_artists),
         ("sources", scene_sources),
         ("radio", scene_radio),
+        ("podcast", scene_podcast),
     ]
 }
 
@@ -923,6 +1063,40 @@ fn scene_radio(state: &mut UiState) {
     });
     state.stream_title = Some("Demo Artist - Demo Song".into());
     state.playback = PlaybackState::Playing;
+}
+
+fn scene_podcast(state: &mut UiState) {
+    state.view = View::Podcast;
+    state.podcast_items = vec![musify_core::SourceItem {
+        id: "demo-podcast".into(),
+        source: musify_core::SourceId::podcast("https://example.com/feed.xml"),
+        title: "Demo Podcast".into(),
+        subtitle: "Demo Author".into(),
+        detail: "Technology".into(),
+        uri: "https://example.com/feed.xml".into(),
+        favorite: true,
+        image_path: None,
+    }];
+    state.podcast_keys = state
+        .podcast_items
+        .iter()
+        .map(|item| format!("{}-{}", item.source.scheme(), item.id))
+        .collect();
+    state.podcast_selected = Some("demo-podcast".into());
+    state.podcast_selected_title = "Demo Podcast".into();
+    state.podcast_entries = vec![musify_core::SourceEntry {
+        id: "demo-episode".into(),
+        source: musify_core::SourceId::podcast("https://example.com/one.mp3"),
+        title: "Episodio di prova".into(),
+        subtitle: "2026-11-10 · 42 min".into(),
+        detail: "Una descrizione breve dell’episodio.".into(),
+        uri: "https://example.com/one.mp3".into(),
+        duration: Some(Duration::from_secs(42 * 60)),
+        published_at: Some(1_762_771_200),
+        watched: false,
+        position: Some(Duration::from_secs(120)),
+        image_path: None,
+    }];
 }
 
 fn musify_radio_track() -> Track {

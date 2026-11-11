@@ -111,7 +111,7 @@ fn nav_button(s: &UiState, view: View, label: &'static str) -> El {
                 View::Albums => s.stats.albums.to_string(),
                 View::Artists => s.stats.artists.to_string(),
                 View::Queue => s.queue.len().to_string(),
-                View::Sources | View::Radio => String::new(),
+                View::Sources | View::Radio | View::Podcast => String::new(),
                 View::Settings => String::new(),
             })
             .font(theme::TINY)

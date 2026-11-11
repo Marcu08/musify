@@ -15,13 +15,16 @@ pub const NAV_SOURCES: &str = "Fonti";
 pub const NAV_SETTINGS: &str = "Impostazioni";
 pub const NAV_LOCAL: &str = "Locale";
 pub const NAV_RADIO: &str = "Radio";
+pub const NAV_PODCAST: &str = "Podcast";
 
 pub const SOURCE_LOCAL: &str = "Locale";
 pub const SOURCE_RADIO: &str = "Radio";
+pub const SOURCE_PODCAST: &str = "Podcast";
 pub const SOURCES_TITLE: &str = "Fonti";
 pub const SOURCES_HINT: &str = "Scegli da dove viene la musica.";
 pub const SOURCE_OPEN: &str = "Apri";
 pub const SOURCES_RADIO_CAPTION: &str = "Radio Browser · preferiti offline";
+pub const SOURCES_PODCAST_CAPTION: &str = "iTunes Search · RSS · episodi e ripresa";
 pub const RADIO_TITLE: &str = "Radio internet";
 pub const RADIO_HINT: &str = "Cerca stazioni con Radio Browser. I preferiti restano sul computer e funzionano anche offline.";
 pub const RADIO_NAME: &str = "Nome";
@@ -36,6 +39,30 @@ pub const RADIO_OFFLINE: &str = "Offline: mostro i risultati salvati";
 pub const RADIO_ADD_FAVORITE: &str = "☆";
 pub const RADIO_REMOVE_FAVORITE: &str = "★";
 pub const RADIO_PLAY: &str = "Ascolta";
+
+pub const PODCAST_TITLE: &str = "Podcast";
+pub const PODCAST_HINT: &str = "Cerca un podcast con iTunes Search, iscriviti e ascolta gli episodi. I feed si aggiornano solo su richiesta.";
+pub const PODCAST_SEARCH_PLACEHOLDER: &str = "Cerca un podcast";
+pub const PODCAST_SEARCH: &str = "Cerca";
+pub const PODCAST_SUBSCRIPTIONS: &str = "Iscrizioni";
+pub const PODCAST_EMPTY: &str = "Nessun podcast";
+pub const PODCAST_EMPTY_HINT: &str = "Cerca un podcast oppure mostra le iscrizioni salvate.";
+pub const PODCAST_LOADING: &str = "Ricerca podcast…";
+pub const PODCAST_SUBSCRIBE: &str = "Iscriviti";
+pub const PODCAST_UNSUBSCRIBE: &str = "Annulla";
+pub const PODCAST_OPEN: &str = "Apri";
+pub const PODCAST_EPISODES_LOADING: &str = "Aggiornamento feed…";
+pub const PODCAST_REFRESH: &str = "Aggiorna feed";
+pub const PODCAST_NO_EPISODES: &str = "Nessun episodio";
+pub const PODCAST_NO_EPISODES_HINT: &str = "Aggiorna il feed per scaricare l’elenco degli episodi.";
+pub const PODCAST_NO_SELECTION: &str = "Scegli un podcast";
+pub const PODCAST_NO_SELECTION_HINT: &str = "Apri un podcast per vedere gli episodi disponibili.";
+pub const PODCAST_PLAY: &str = "Ascolta";
+pub const PODCAST_MARK_WATCHED: &str = "Segna ascoltato";
+pub const PODCAST_MARK_UNWATCHED: &str = "Non ascoltato";
+pub const PODCAST_WATCHED: &str = "Ascoltato";
+pub const PODCAST_RESUME: &str = "Riprendi a";
+pub const NOT_SEEKABLE: &str = "Stream non seekable";
 
 pub const SEARCH_PLACEHOLDER: &str = "Cerca brani, album, artisti";
 pub const SEARCH_EMPTY: &str = "Nessun risultato";
@@ -197,6 +224,7 @@ pub fn source_label(scheme: &str) -> &'static str {
     match scheme {
         "local" => SOURCE_LOCAL,
         "radio" => SOURCE_RADIO,
+        "podcast" => SOURCE_PODCAST,
         _ => "Sorgente",
     }
 }

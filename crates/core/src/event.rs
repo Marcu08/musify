@@ -43,6 +43,7 @@ pub enum Event {
     RepeatChanged(RepeatMode),
     StreamStatusChanged(StreamStatus),
     StreamTitleChanged(Option<String>),
+    SeekableChanged(bool),
     SourceResults {
         source: String,
         request_id: u64,
@@ -58,6 +59,11 @@ pub enum Event {
         source: String,
         id: String,
         path: std::path::PathBuf,
+    },
+    SourceEntries {
+        source: String,
+        id: String,
+        result: Result<Vec<crate::SourceEntry>, String>,
     },
     ScanStarted {
         folders: usize,

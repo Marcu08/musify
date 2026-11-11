@@ -12,10 +12,12 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use musify_audio::AudioEngine;
 use musify_core::{
-    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, RepeatMode, SearchResults,
-    SourceItem, SourceQuery, Track, TrackSort,
+    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, RepeatMode,
+    SearchResults, SourceEntry, SourceId, SourceItem, SourcePlayback, SourceQuery, Track, TrackId,
+    TrackSort,
 };
 use musify_library::{Library, LibraryWatcher};
+use musify_podcast::{PodcastSource, PodcastStore};
 use musify_radio::{RadioBrowser, RadioStore};
 use musify_ui::Backend;
 
@@ -40,6 +42,18 @@ pub struct AppBackend {
     watcher: Mutex<Option<LibraryWatcher>>,
     smtc: Smtc,
     queue: QueueStore,
+    current_source: Mutex<Option<CurrentSource>>,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentSource {
+    source: String,
+    entry_id: String,
+    track_uri: String,
+    duration: Option<Duration>,
+    position: Duration,
+    watched: bool,
+    last_save: Instant,
 }
 
 impl AppBackend {
@@ -59,6 +73,11 @@ impl AppBackend {
         )?);
         let radio_store = Arc::new(RadioStore::open(&data_dir.join("radio.sqlite3"))?);
         let radio = Arc::new(RadioBrowser::new(radio_store));
+        let podcast_store = Arc::new(PodcastStore::open(&data_dir.join("podcasts.sqlite3"))?);
+        let podcast = Arc::new(PodcastSource::new(
+            podcast_store,
+            data_dir.join("podcast-covers"),
+        ));
         let (event_tx, event_rx) = unbounded();
         let waker = Arc::new(Mutex::new(None::<Waker>));
         let config = Arc::new(Mutex::new(config));
@@ -71,6 +90,7 @@ impl AppBackend {
         };
         let mut sources = SourceRegistry::new(event_tx.clone(), Arc::clone(&waker));
         sources.register(radio);
+        sources.register(podcast);
 
         let audio = if std::env::var("MUSIFY_NO_AUDIO").as_deref() == Ok("1") {
             None
@@ -123,6 +143,7 @@ impl AppBackend {
             watcher: Mutex::new(None),
             smtc: Smtc::new(),
             queue: QueueStore::new(state_path),
+            current_source: Mutex::new(None),
         };
         if let Ok(config) = backend.config.lock() {
             let shuffle = config.shuffle;
@@ -142,6 +163,26 @@ impl AppBackend {
                 ..musify_radio::Station::default()
             };
             backend.send_audio(Command::PlayTrack(Box::new(station.to_track())));
+        }
+        if let Ok(url) = std::env::var("MUSIFY_AUTOPLAY_PODCAST")
+            && !url.trim().is_empty()
+        {
+            backend.send_audio(Command::PlayTrack(Box::new(Track {
+                id: TrackId::new(1),
+                source: SourceId::podcast(url),
+                path: PathBuf::new(),
+                title: "Podcast test".into(),
+                artist: "Podcast".into(),
+                album: "Podcast".into(),
+                album_artist: None,
+                track_number: None,
+                disc_number: None,
+                duration: Duration::ZERO,
+                year: None,
+                genre: None,
+                cover_path: None,
+                added_at: 0,
+            })));
         }
         if std::env::var("MUSIFY_AUTOPLAY").as_deref() == Ok("1")
             && let Ok(tracks) = backend.library.tracks_sorted(
@@ -237,6 +278,7 @@ impl AppBackend {
     }
 
     fn observe_event(&self, event: &Event) {
+        self.track_source_progress(event);
         let update = self.smtc.observe(event);
         if matches!(
             event,
@@ -251,10 +293,101 @@ impl AppBackend {
             self.smtc.update(update.metadata);
         }
     }
+
+    fn track_source_progress(&self, event: &Event) {
+        match event {
+            Event::TrackChanged(Some(item)) => {
+                let mut slot = self
+                    .current_source
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if slot
+                    .as_ref()
+                    .is_some_and(|current| current.track_uri != item.track.source.uri())
+                    && let Some(current) = slot.take()
+                {
+                    drop(slot);
+                    self.save_source_progress(&current);
+                }
+            }
+            Event::TrackChanged(None) => {
+                let current = self
+                    .current_source
+                    .lock()
+                    .ok()
+                    .and_then(|mut slot| slot.take());
+                if let Some(current) = current {
+                    self.save_source_progress(&current);
+                }
+            }
+            Event::PositionChanged { position, duration } => {
+                let pending = {
+                    let mut slot = self
+                        .current_source
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let Some(current) = slot.as_mut() else {
+                        return;
+                    };
+                    current.position = *position;
+                    if duration.is_some() {
+                        current.duration = *duration;
+                    }
+                    current.watched |= current.duration.is_some_and(|total| {
+                        !total.is_zero() && *position + Duration::from_secs(5) >= total
+                    });
+                    if current.watched || current.last_save.elapsed() >= Duration::from_secs(2) {
+                        current.last_save = Instant::now();
+                        Some(current.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(current) = pending {
+                    self.save_source_progress(&current);
+                }
+            }
+            Event::PlaybackStateChanged(PlaybackState::Paused | PlaybackState::Stopped) => {
+                let current = self
+                    .current_source
+                    .lock()
+                    .ok()
+                    .and_then(|slot| slot.clone());
+                if let Some(current) = current {
+                    self.save_source_progress(&current);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn save_source_progress(&self, current: &CurrentSource) {
+        if let Err(error) = self.sources.save_progress(
+            &current.source,
+            &current.entry_id,
+            current.position,
+            current.watched,
+        ) {
+            tracing::warn!(
+                %error,
+                source = %current.source,
+                entry = %current.entry_id,
+                "cannot save source progress"
+            );
+        }
+    }
 }
 
 impl Drop for AppBackend {
     fn drop(&mut self) {
+        let current = self
+            .current_source
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Some(current) = current {
+            self.save_source_progress(&current);
+        }
         self.queue.save(&self.audio, true);
         if let Ok(audio) = self.audio.lock()
             && let Some(audio) = audio.as_ref()
@@ -410,23 +543,66 @@ impl Backend for AppBackend {
     }
 
     fn source_play(&self, source: &str, id: &str) {
-        match self.sources.resolve(source, id) {
-            Ok(resolved) => {
-                tracing::debug!(
-                    source,
-                    playback = ?resolved.playback,
-                    "source item resolved"
-                );
-                self.send_audio(Command::PlayTrack(Box::new(resolved.track)));
-            }
+        let resolved = match self.sources.resolve(source, id) {
+            Ok(resolved) => resolved,
             Err(message) => {
                 let _ = self.events_tx.send(Event::Error {
                     context: source.to_string(),
                     message,
                 });
                 wake(&self.waker);
+                return;
             }
+        };
+        let resume = match resolved.playback {
+            SourcePlayback::OnDemand { .. } => {
+                self.sources.resume_position(source, id).ok().flatten()
+            }
+            SourcePlayback::Live => None,
+        };
+        let previous = self
+            .current_source
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(previous) = previous {
+            self.save_source_progress(&previous);
         }
+        if let SourcePlayback::OnDemand { duration, .. } = resolved.playback
+            && let Ok(mut slot) = self.current_source.lock()
+        {
+            *slot = Some(CurrentSource {
+                source: source.to_string(),
+                entry_id: id.to_string(),
+                track_uri: resolved.track.source.uri().to_string(),
+                duration: Some(duration),
+                position: resume.unwrap_or_default(),
+                watched: false,
+                last_save: Instant::now() - Duration::from_secs(10),
+            });
+        }
+        tracing::debug!(
+            source,
+            playback = ?resolved.playback,
+            "source item resolved"
+        );
+        if let Some(position) = resume.filter(|position| !position.is_zero()) {
+            self.send_audio(Command::PlayTrackAt(Box::new(resolved.track), position));
+        } else {
+            self.send_audio(Command::PlayTrack(Box::new(resolved.track)));
+        }
+    }
+
+    fn source_entries(&self, source: &str, id: &str) -> Result<Vec<SourceEntry>, String> {
+        self.sources.entries(source, id)
+    }
+
+    fn source_refresh(&self, source: &str, id: &str) {
+        self.sources.refresh(source, id);
+    }
+
+    fn source_set_watched(&self, source: &str, id: &str, watched: bool) -> Result<(), String> {
+        self.sources.set_watched(source, id, watched)
     }
 
     fn playback_settings(&self) -> (u16, bool, RepeatMode) {

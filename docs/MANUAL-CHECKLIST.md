@@ -1,7 +1,8 @@
 # Checklist manuale — Musify
 
 Data: 2026-11-10
-Ambito: M5.2 (registro fonti e refactor backend), M5.1/M5 (radio) e M4 (Windows).
+Ambito: M6.1 (HTTP Range e podcast), M5.2 (registro fonti), M5.1/M5 (radio)
+e M4 (Windows).
 Queste verifiche richiedono una finestra reale, il mixer di Windows o la sessione
 utente: non sono automatizzabili in modo affidabile. Eseguirle su una build
 release (`cargo build -p musify --release`) e annotare data, DPI e dispositivo
@@ -125,7 +126,24 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 | Con la riproduzione attiva, controllare l'overlay Windows | Titolo, artista, copertina e posizione si aggiornano come in M5.1. |
 | Aprire `%APPDATA%\Musify\` | `config.toml`, `state.json`, `library.sqlite3`, `radio.sqlite3` e `radio-icons/` sono gli unici file attesi. |
 
-## 8. Riposo
+## 8. HTTP Range e podcast (M6.1)
+
+| Passo | Risultato atteso |
+| --- | --- |
+| Aprire Fonti → Podcast | La vista mostra ricerca, pulsante Iscrizioni e l'elenco vuoto o salvato. |
+| Cercare `The Daily` | Arrivano risultati iTunes con copertina; durante la ricerca compare lo stato di caricamento. |
+| Iscriviti a un podcast e apri la scheda | Il feed viene letto una volta; compaiono titolo, data, durata e descrizione degli episodi. |
+| Premere Aggiorna feed | Gli episodi vengono riletti; watched e posizione degli episodi esistenti non vengono azzerati. |
+| Avviare un episodio MP3 con Range | L'audio parte; la barra mostra la durata e il trascinamento esegue un seek. |
+| Portare la posizione a metà episodio, mettere in pausa e chiudere Musify | Alla riapertura e al nuovo avvio dell'episodio la riproduzione riprende dalla posizione salvata. |
+| Arrivare a meno di 5 secondi dalla fine | L'episodio viene marcato `Ascoltato`; al riavvio non riparte dalla fine. |
+| Premere `Segna ascoltato` / `Non ascoltato` | Lo stato cambia e resta dopo il riavvio. |
+| Controllare l'overlay Windows durante un episodio | Mostra titolo episodio, autore/podcast, copertina e durata; i comandi play/pausa/seek funzionano. |
+| Provare un server senza `Accept-Ranges` (test mock) | L'episodio parte ma la UI mostra `Stream non seekable` e il trascinamento è disabilitato. |
+| Controllare Task Manager a riposo con Podcast aperto | Nessun polling o runtime di rete attivo: la CPU resta a 0,0-0,3%. |
+| Controllare `%APPDATA%\Musify\` | `podcasts.sqlite3` e `podcast-covers/` contengono solo iscrizioni, episodi e copertine usate. |
+
+## 9. Riposo
 
 | Passo | Risultato atteso |
 | --- | --- |

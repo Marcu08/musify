@@ -3,6 +3,7 @@ mod artists;
 mod common;
 mod content;
 mod player;
+mod podcast;
 mod queue;
 mod radio;
 mod search;

@@ -13,6 +13,7 @@ musify-core.workspace = true
 musify-audio.workspace = true
 musify-library.workspace = true
 musify-radio.workspace = true
+musify-podcast.workspace = true
 musify-ui.workspace = true
 anyhow.workspace = true
 crossbeam-channel.workspace = true

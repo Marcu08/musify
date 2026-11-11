@@ -14,7 +14,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::error::AudioError;
-use crate::http_stream::HttpStream;
+use crate::http_stream::{HttpStream, StreamMode};
 use crate::resample::Resampler;
 
 /// One decoded track, converted to interleaved stereo f32 at the output rate.
@@ -54,13 +54,22 @@ impl TrackDecoder {
         )
     }
 
-    pub fn open_stream(source: &SourceId, output_rate: u32) -> Result<Self, AudioError> {
+    pub fn open_stream(
+        source: &SourceId,
+        output_rate: u32,
+        on_demand: bool,
+    ) -> Result<Self, AudioError> {
         if source.uri().to_ascii_lowercase().contains(".m3u8") {
             return Err(AudioError::Unsupported(
                 "gli stream HLS non sono supportati".into(),
             ));
         }
-        let handle = Arc::new(HttpStream::start(source.uri().to_string()));
+        let mode = if on_demand {
+            StreamMode::OnDemand
+        } else {
+            StreamMode::Live
+        };
+        let handle = Arc::new(HttpStream::start(source.uri().to_string(), mode));
         let content_type = handle.wait_ready()?.unwrap_or_default();
         if is_hls_content_type(&content_type) {
             return Err(AudioError::Unsupported(
@@ -174,6 +183,12 @@ impl TrackDecoder {
 
     pub fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    pub fn is_seekable(&self) -> bool {
+        self.stream
+            .as_ref()
+            .is_none_or(|stream| stream.is_seekable())
     }
 
     fn stream_generation_changed(&self) -> bool {
@@ -384,7 +399,7 @@ mod tests {
     #[test]
     fn hls_urls_fail_with_a_clear_unsupported_error() {
         let source = musify_core::SourceId::radio("https://stream.example/live/index.m3u8");
-        let Err(error) = TrackDecoder::open_stream(&source, 48_000) else {
+        let Err(error) = TrackDecoder::open_stream(&source, 48_000, false) else {
             panic!("HLS must not open as a progressive stream");
         };
         assert!(matches!(error, AudioError::Unsupported(_)));
@@ -423,13 +438,158 @@ mod tests {
             socket.flush().expect("flush");
         });
         let source = musify_core::SourceId::radio(url);
-        let mut decoder = TrackDecoder::open_stream(&source, 48_000).expect("open stream");
+        let mut decoder = TrackDecoder::open_stream(&source, 48_000, false).expect("open stream");
         let mut out = Vec::new();
         let frames = decoder.decode_into(&mut out, 4096).expect("decode");
         assert!(frames > 0, "the HTTP stream should decode audio");
         assert!(out.iter().all(|sample| sample.is_finite()));
         drop(decoder);
         let _ = server.join();
+    }
+
+    #[test]
+    fn seeks_an_http_on_demand_stream_with_range_requests() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let bytes =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assets/tone.mp3"))
+                .expect("read tone");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let address = listener.local_addr().expect("addr");
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = thread::spawn(move || {
+            while !server_stop.load(std::sync::atomic::Ordering::Acquire) {
+                let (mut socket, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(_) => return,
+                };
+                let _ = socket.set_nonblocking(false);
+                let mut request = Vec::new();
+                let mut byte = [0u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    if socket.read(&mut byte).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    request.push(byte[0]);
+                }
+                let text = String::from_utf8_lossy(&request);
+                let start = text
+                    .lines()
+                    .find_map(|line| {
+                        let line = line.to_ascii_lowercase();
+                        line.strip_prefix("range: bytes=")
+                            .and_then(|value| value.split('-').next())
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if start > 0 {
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\n\
+                         Content-Type: audio/mpeg\r\n\
+                         Accept-Ranges: bytes\r\n\
+                         Content-Range: bytes {start}-{}/{}\r\n\
+                         Content-Length: {}\r\n\r\n",
+                        bytes.len() - 1,
+                        bytes.len(),
+                        bytes.len() - start
+                    );
+                    socket.write_all(header.as_bytes()).expect("headers");
+                    socket.write_all(&bytes[start..]).expect("body");
+                } else {
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: audio/mpeg\r\n\
+                         Accept-Ranges: bytes\r\n\
+                         Content-Length: {}\r\n\r\n",
+                        bytes.len()
+                    );
+                    socket.write_all(header.as_bytes()).expect("headers");
+                    socket.write_all(&bytes).expect("body");
+                }
+                socket.flush().expect("flush");
+                drop(socket);
+            }
+        });
+
+        let source = musify_core::SourceId::podcast(format!("http://{address}/episode.mp3"));
+        let mut decoder =
+            TrackDecoder::open_stream(&source, 48_000, true).expect("open on-demand stream");
+        assert!(decoder.is_seekable());
+        let mut out = Vec::new();
+        let frames = decoder.decode_into(&mut out, 4096).expect("decode");
+        assert!(frames > 0);
+        let actual = decoder
+            .seek(Duration::from_millis(350))
+            .expect("range seek");
+        assert!(actual <= Duration::from_millis(350));
+        out.clear();
+        let frames = decoder
+            .decode_into(&mut out, 4096)
+            .expect("decode after range seek");
+        assert!(frames > 0);
+        drop(decoder);
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = server.join();
+    }
+
+    #[test]
+    #[ignore = "real network; run manually"]
+    fn plays_and_seeks_a_real_podcast_episode() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let feed = runtime
+            .block_on(async {
+                let client = reqwest::Client::builder()
+                    .user_agent("Musify/0.1.0")
+                    .build()?;
+                client
+                    .get("https://feeds.simplecast.com/54nAGcIl")
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .text()
+                    .await
+            })
+            .expect("real podcast feed");
+        let enclosure = feed.find("<enclosure").expect("enclosure");
+        let tag = &feed[enclosure..enclosure + feed[enclosure..].find('>').expect("tag")];
+        let url_start = tag.find("url=\"").expect("url") + "url=\"".len();
+        let url_end = tag[url_start..].find('"').expect("url end") + url_start;
+        let url = tag[url_start..url_end].replace("&amp;", "&");
+        println!("episode: {url}");
+        let source = musify_core::SourceId::podcast(url);
+        let mut decoder = TrackDecoder::open_stream(&source, 48_000, true).expect("open real");
+        println!(
+            "duration: {:?}, seekable: {}",
+            decoder.duration(),
+            decoder.is_seekable()
+        );
+        assert!(
+            decoder.is_seekable(),
+            "the real server should support Range"
+        );
+        let mut out = Vec::new();
+        let frames = decoder.decode_into(&mut out, 4096).expect("decode real");
+        assert!(frames > 0);
+        let actual = decoder.seek(Duration::from_secs(30)).expect("seek real");
+        assert!(actual <= Duration::from_secs(30));
+        out.clear();
+        let frames = decoder
+            .decode_into(&mut out, 4096)
+            .expect("decode after real seek");
+        assert!(frames > 0);
     }
 
     #[test]

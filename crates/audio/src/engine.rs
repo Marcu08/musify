@@ -244,6 +244,9 @@ impl EngineThread {
     fn handle(&mut self, command: Command) -> bool {
         match command {
             Command::PlayTrack(track) => self.start_tracks(vec![*track], 0),
+            Command::PlayTrackAt(track, position) => {
+                self.start_tracks_internal(vec![*track], 0, true, position)
+            }
             Command::PlayTracks {
                 tracks,
                 start_index,
@@ -355,9 +358,9 @@ impl EngineThread {
                 self.set_state(PlaybackState::Playing);
             } else {
                 self.set_state(PlaybackState::Paused);
-                if !position.is_zero() {
-                    self.seek(position);
-                }
+            }
+            if !position.is_zero() {
+                self.seek(position);
             }
         } else {
             self.set_state(PlaybackState::Stopped);
@@ -394,8 +397,10 @@ impl EngineThread {
                 self.current_origin = self.decoded_frames;
                 self.seek_offset = Duration::ZERO;
                 let stream = !item.track.is_local();
+                let seekable = decoder.is_seekable();
                 self.decoder = Some(decoder);
                 self.emit(Event::TrackChanged(Some(item)));
+                self.emit(Event::SeekableChanged(seekable));
                 self.emit(Event::StreamTitleChanged(None));
                 self.emit(Event::StreamStatusChanged(if stream {
                     StreamStatus::Connecting
@@ -421,7 +426,11 @@ impl EngineThread {
         let decoder = if item.track.is_local() {
             TrackDecoder::open(&item.track.path, self.info.sample_rate)?
         } else {
-            TrackDecoder::open_stream(&item.track.source, self.info.sample_rate)?
+            TrackDecoder::open_stream(
+                &item.track.source,
+                self.info.sample_rate,
+                item.track.is_on_demand(),
+            )?
         };
         if item.track.duration.is_zero() {
             item.track.duration = decoder.duration().unwrap_or_default();
@@ -530,6 +539,9 @@ impl EngineThread {
             self.current_origin = boundary.at_frame;
             self.seek_offset = boundary.seek_offset;
             self.emit(Event::TrackChanged(Some(boundary.item)));
+            self.emit(Event::SeekableChanged(
+                self.decoder.as_ref().is_some_and(TrackDecoder::is_seekable),
+            ));
             self.emit_position();
         }
     }
@@ -609,12 +621,8 @@ impl EngineThread {
         if self.decoder.is_none() || self.current.is_none() {
             return;
         }
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|item| !item.track.is_local())
-        {
-            // Live streams have no timeline to seek.
+        if !self.decoder.as_ref().is_some_and(TrackDecoder::is_seekable) {
+            // Live or non-Range streams have no seekable timeline.
             return;
         }
         let duration = self.current.as_ref().map(|item| item.track.duration);

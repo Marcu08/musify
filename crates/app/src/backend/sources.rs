@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crossbeam_channel::Sender;
-use musify_core::{Event, ResolvedSource, SourceItem, SourceProvider, SourceQuery};
+use musify_core::{Event, ResolvedSource, SourceEntry, SourceItem, SourceProvider, SourceQuery};
 
 use super::Waker;
 
@@ -128,6 +128,72 @@ impl SourceRegistry {
         self.entry(source)?
             .provider
             .resolve(id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn entries(&self, source: &str, id: &str) -> Result<Vec<SourceEntry>, String> {
+        self.entry(source)?
+            .provider
+            .entries(id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn refresh(&self, source: &str, id: &str) {
+        let Ok(entry) = self.entry(source) else {
+            let _ = self.events.send(Event::SourceEntries {
+                source: source.to_string(),
+                id: id.to_string(),
+                result: Err(format!("source '{source}' is not registered")),
+            });
+            wake(&self.waker);
+            return;
+        };
+        let provider = Arc::clone(&entry.provider);
+        let source_name = provider.scheme().to_string();
+        let id = id.to_string();
+        let events = self.events.clone();
+        let waker = Arc::clone(&self.waker);
+        let _ = thread::Builder::new()
+            .name(format!("musify-{source}-refresh"))
+            .spawn(move || {
+                let result = provider.refresh(&id).map_err(|error| error.to_string());
+                let _ = events.send(Event::SourceEntries {
+                    source: source_name,
+                    id,
+                    result,
+                });
+                wake(&waker);
+            });
+    }
+
+    pub(crate) fn resume_position(
+        &self,
+        source: &str,
+        id: &str,
+    ) -> Result<Option<std::time::Duration>, String> {
+        self.entry(source)?
+            .provider
+            .resume_position(id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn save_progress(
+        &self,
+        source: &str,
+        id: &str,
+        position: std::time::Duration,
+        watched: bool,
+    ) -> Result<(), String> {
+        self.entry(source)?
+            .provider
+            .save_progress(id, position, watched)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn set_watched(&self, source: &str, id: &str, watched: bool) -> Result<(), String> {
+        self.entry(source)?
+            .provider
+            .set_watched(id, watched)
             .map_err(|error| error.to_string())
     }
 

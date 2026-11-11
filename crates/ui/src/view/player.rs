@@ -13,7 +13,11 @@ pub fn view(s: &UiState) -> El {
     let radio = s
         .current
         .as_ref()
-        .is_some_and(|item| !item.track.is_local());
+        .is_some_and(|item| item.track.source.scheme() == "radio");
+    let podcast = s
+        .current
+        .as_ref()
+        .is_some_and(|item| item.track.source.scheme() == "podcast");
     let current_title = s.current.as_ref().map_or_else(
         || i18n::NO_TRACK.to_string(),
         |item| {
@@ -42,6 +46,8 @@ pub fn view(s: &UiState) -> El {
             musify_core::PlaybackState::Paused => i18n::PAUSED.to_string(),
             musify_core::PlaybackState::Stopped => i18n::STOPPED.to_string(),
         }
+    } else if podcast && !s.seekable {
+        i18n::NOT_SEEKABLE.to_string()
     } else {
         i18n::state_label(s.playback).to_string()
     };
@@ -114,6 +120,26 @@ pub fn view(s: &UiState) -> El {
     } else {
         (s.position.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
     };
+    let mut seek_control = el().key("seek").w(SEEK_W).h(16.0).child(
+        el().w(SEEK_W)
+            .h(4.0)
+            .radius(2.0)
+            .fill(p.control_track)
+            .child(
+                el().w((SEEK_W * fraction).max(0.0))
+                    .h(4.0)
+                    .radius(2.0)
+                    .fill(p.accent),
+            ),
+    );
+    if s.seekable {
+        seek_control = seek_control.on_drag(|s: &mut UiState, drag: &mut Drag, _tx| {
+            if matches!(drag.phase, Phase::Down | Phase::Up) {
+                let fraction = (drag.x / drag.w.max(1.0)).clamp(0.0, 1.0);
+                s.seek_fraction(fraction);
+            }
+        });
+    }
     let seek = col().w_full().gap(3.0).child(controls).child(
         row()
             .w_full()
@@ -125,32 +151,12 @@ pub fn view(s: &UiState) -> El {
                     .color(p.text_secondary)
                     .w(44.0),
             )
-            .child(
-                el().key("seek")
-                    .w(SEEK_W)
-                    .h(16.0)
-                    .on_drag(|s: &mut UiState, drag: &mut Drag, _tx| {
-                        if matches!(drag.phase, Phase::Down | Phase::Up) {
-                            let fraction = (drag.x / drag.w.max(1.0)).clamp(0.0, 1.0);
-                            s.seek_fraction(fraction);
-                        }
-                    })
-                    .child(
-                        el().w(SEEK_W)
-                            .h(4.0)
-                            .radius(2.0)
-                            .fill(p.control_track)
-                            .child(
-                                el().w((SEEK_W * fraction).max(0.0))
-                                    .h(4.0)
-                                    .radius(2.0)
-                                    .fill(p.accent),
-                            ),
-                    ),
-            )
+            .child(seek_control)
             .child(
                 text(if radio {
                     "LIVE".to_string()
+                } else if duration.is_zero() {
+                    "—".to_string()
                 } else {
                     i18n::duration_text(duration)
                 })

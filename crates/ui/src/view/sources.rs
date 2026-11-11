@@ -20,6 +20,12 @@ pub fn view(s: &UiState) -> El {
         i18n::SOURCE_OPEN,
         View::Radio,
     );
+    let podcast = source_card(
+        i18n::NAV_PODCAST,
+        i18n::SOURCES_PODCAST_CAPTION,
+        i18n::SOURCE_OPEN,
+        View::Podcast,
+    );
     col()
         .w_full()
         .h_full()
@@ -35,7 +41,14 @@ pub fn view(s: &UiState) -> El {
                 .font(theme::ROW_META)
                 .color(p.text_secondary),
         )
-        .child(row().w_full().gap(14.0).child(local).child(radio))
+        .child(
+            row()
+                .w_full()
+                .gap(14.0)
+                .child(local)
+                .child(radio)
+                .child(podcast),
+        )
         .child(el().h(12.0))
 }
 
