@@ -14,6 +14,7 @@ Stato iniziale: ultimo commit `aca8763` (M6.1), lavoro M7.1/M7.2 non committato.
 | `5c92587` | `M7.1 e M7.2: playlist generiche e fonte Jamendo` | codice M7.1 e M7.2 (32 file) |
 | `027adfd` | `docs: report e misure M7.1/M7.2` | report, misure, screenshot, README, ARCHITECTURE, checklist |
 | `ff35e22` | `chore: scan segreti sull'albero in pre-push` | modalità `-All` e hook pre-push aggiornato |
+| `f0fa3bf` | `docs: report del flusso Git` | questo report |
 
 M7.1 e M7.2 sono in un unico commit di codice perché condividono gli stessi
 hunk in `core/domain`, `app/backend`, `ui/state`, `i18n`, `View`, routing,
@@ -93,6 +94,8 @@ le regole e i file già versionati sono stati aggiunti con LF.
 - Esito: `aca8763..ff35e22  main -> main`.
 - CI GitHub Actions: run `43228640737`, conclusione `completed success`, durata
   6m13s.
+- Push del report: `ff35e22..f0fa3bf  main -> main`; CI run `43245372423`,
+  conclusione `completed success`, durata 3m54s.
 - Tag annotati:
   - `m7.1` — oggetto `48eda87`, puntato a `ff35e22`;
   - `m7.2` — oggetto `5abef40`, puntato a `ff35e22`.
@@ -100,6 +103,8 @@ le regole e i file già versionati sono stati aggiunti con LF.
   insieme; `ff35e22` è lo stato verificato che contiene codice, report e hook.
 - Il push dei soli tag è stato fatto con `--no-verify`: non cambiava codice e la
   suite era già stata eseguita dal hook pre-push e dalla CI.
+- Un eventuale aggiornamento successivo di questo report è un commit docs-only
+  di manutenzione.
 
 ## 7. Stato finale e note residue
 
