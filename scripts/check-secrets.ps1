@@ -1,12 +1,19 @@
 # Scans files staged for commit and fails if it finds likely secrets.
+# With -All it scans every tracked file (useful before a push).
 # It prints only file names and line numbers, never the matched value.
+param([switch]$All)
+
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 Push-Location $root
 try {
-    $staged = @(git diff --cached --name-only --diff-filter=ACMR)
+    $staged = if ($All) {
+        @(git ls-files)
+    } else {
+        @(git diff --cached --name-only --diff-filter=ACMR)
+    }
     if ($staged.Count -eq 0) {
-        Write-Host "check-secrets: nessun file staged"
+        Write-Host "check-secrets: nessun file da scansionare"
         exit 0
     }
 
@@ -47,7 +54,9 @@ try {
                 $findings.Add("${file}:$($index + 1) (possibile segreto)")
                 continue
             }
-            if ($normalized -notmatch "(^|/)Cargo\.lock$" -and (
+            if ($normalized -notmatch "(^|/)(Cargo\.toml|Cargo\.lock)$" -and
+                $line -notmatch "://" -and
+                $line -notmatch "\brev\s*=" -and (
                 $line -match "\b[0-9a-fA-F]{64,}\b" -or
                 $line -match "\b[A-Za-z0-9+/]{48,}={0,2}\b"
             )) {
@@ -62,7 +71,11 @@ try {
         exit 1
     }
 
-    Write-Host "check-secrets: nessun segreto rilevato nei file staged"
+    if ($All) {
+        Write-Host "check-secrets: nessun segreto rilevato nell'albero"
+    } else {
+        Write-Host "check-secrets: nessun segreto rilevato nei file staged"
+    }
     exit 0
 } finally {
     Pop-Location

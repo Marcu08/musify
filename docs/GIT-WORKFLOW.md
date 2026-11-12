@@ -66,7 +66,8 @@ git config core.hooksPath .githooks
 ```
 
 - `.githooks/pre-commit`: scan segreti sui file staged e `cargo fmt --check`.
-- `.githooks/pre-push`: `cargo clippy -D warnings` e `cargo test`.
+- `.githooks/pre-push`: scan segreti sull'intero albero, `cargo clippy -D warnings`
+  e `cargo test`.
 - Su Windows gli hook girano con Git Bash e richiamano PowerShell per lo scan.
 - Se PowerShell non è disponibile, il pre-commit fallisce invece di saltare il
   controllo.

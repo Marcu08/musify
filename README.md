@@ -152,9 +152,10 @@ git config core.hooksPath .githooks
 ```
 
 Il `pre-commit` esegue lo scan segreti (`scripts/check-secrets.ps1`) e
-`cargo fmt --all -- --check`; il `pre-push` esegue clippy e test. Su Windows gli
-hook girano con Git Bash e richiamano PowerShell per lo scan. Dettagli e regole
-di sicurezza in [docs/GIT-WORKFLOW.md](docs/GIT-WORKFLOW.md).
+`cargo fmt --all -- --check`; il `pre-push` esegue lo scan sull'intero albero,
+clippy e test. Su Windows gli hook girano con Git Bash e richiamano PowerShell
+per lo scan. Dettagli e regole di sicurezza in
+[docs/GIT-WORKFLOW.md](docs/GIT-WORKFLOW.md).
 
 ## Scorciatoie
 
