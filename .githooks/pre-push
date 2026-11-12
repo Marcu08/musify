@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+cargo clippy --workspace --all-targets -j 1 -- -D warnings
+cargo test --workspace -j 1
