@@ -10,3 +10,22 @@ Thumbs.db
 /bench
 *.png.tmp
 /*.png
+*.tmp
+
+# Local databases, caches and secrets
+.env*
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+jamendo-covers/
+podcast-covers/
+radio-icons/
+covers/
+
+# Generated binaries
+*.exe
+*.dll
+*.rlib
+*.rmeta
