@@ -84,6 +84,7 @@ fn queue_row(s: &UiState, index: usize) -> El {
         && s.playback != musify_core::PlaybackState::Stopped;
     let id = item.id;
     let track = item.track.clone();
+    let add_track = track.clone();
     let title = common::unknown_title(&track.title);
     let artist = common::unknown_artist(&track.artist);
     let duration = if track.duration.is_zero() {
@@ -136,6 +137,11 @@ fn queue_row(s: &UiState, index: usize) -> El {
                 .font(theme::TIME)
                 .color(p.text_secondary)
                 .w(48.0),
+        )
+        .child(
+            common::small_action(i18n::PLAYLIST_ADD).on_press(move |s: &mut UiState| {
+                s.add_track_to_selected_playlist(add_track.clone());
+            }),
         )
         .child(
             common::small_action(i18n::UP).on_press(move |s: &mut UiState| s.move_queue_id(id, -1)),

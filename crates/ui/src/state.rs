@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use musify_core::{
-    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, QueueItem,
-    QueueItemId, RepeatMode, SearchResults, SourceEntry, SourceItem, SourceQuery, StreamStatus,
-    Track, TrackId, TrackSort,
+    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, Playlist,
+    PlaylistId, PlaylistItem, PlaylistItemId, QueueItem, QueueItemId, RepeatMode, SearchResults,
+    SourceEntry, SourceItem, SourceQuery, StreamStatus, Track, TrackId, TrackSort,
 };
 use rune::{Image, ImageCache, Key, KeyEvent, TextEdit, Tx, Waker};
 
@@ -19,10 +19,12 @@ pub enum View {
     Tracks,
     Albums,
     Artists,
+    Playlists,
     Queue,
     Sources,
     Radio,
     Podcast,
+    Jamendo,
     Settings,
 }
 
@@ -161,15 +163,32 @@ pub struct UiState {
     pub podcast_selected_title: String,
     pub podcast_entries: Vec<SourceEntry>,
     pub podcast_entries_loading: bool,
+    pub jamendo_available: bool,
+    pub jamendo_query: TextEdit,
+    pub jamendo_tag: TextEdit,
+    pub jamendo_items: Vec<SourceItem>,
+    pub jamendo_keys: Vec<String>,
+    pub jamendo_loading: bool,
+    pub jamendo_offline: bool,
     pub stream_title: Option<String>,
     pub stream_status: StreamStatus,
     pub seekable: bool,
+    pub playlists: Vec<Playlist>,
+    pub playlist_keys: Vec<String>,
+    pub selected_playlist: Option<PlaylistId>,
+    pub selected_playlist_name: String,
+    pub playlist_items: Vec<PlaylistItem>,
+    pub playlist_item_keys: Vec<String>,
+    pub playlist_selected_item: Option<PlaylistItemId>,
+    pub playlist_name: TextEdit,
+    pub playlist_status: Option<String>,
 }
 
 impl UiState {
     pub fn new(backend: Arc<dyn Backend>) -> Self {
         let (volume, shuffle, repeat) = backend.playback_settings();
         let output = backend.output_info();
+        let jamendo_available = backend.source_available("jamendo");
         let mut state = Self {
             backend,
             view: View::Tracks,
@@ -214,9 +233,25 @@ impl UiState {
             podcast_selected_title: String::new(),
             podcast_entries: Vec::new(),
             podcast_entries_loading: false,
+            jamendo_available,
+            jamendo_query: TextEdit::default(),
+            jamendo_tag: TextEdit::default(),
+            jamendo_items: Vec::new(),
+            jamendo_keys: Vec::new(),
+            jamendo_loading: false,
+            jamendo_offline: false,
             stream_title: None,
             stream_status: StreamStatus::Idle,
             seekable: true,
+            playlists: Vec::new(),
+            playlist_keys: Vec::new(),
+            selected_playlist: None,
+            selected_playlist_name: String::new(),
+            playlist_items: Vec::new(),
+            playlist_item_keys: Vec::new(),
+            playlist_selected_item: None,
+            playlist_name: TextEdit::default(),
+            playlist_status: None,
         };
         state.reload();
         state
@@ -270,6 +305,10 @@ impl UiState {
             self.stats = stats;
         }
         self.folders = self.backend.folders();
+        self.refresh_playlists();
+        if self.selected_playlist.is_some() {
+            self.reload_playlist_items();
+        }
         self.reload_filter();
         self.list_version = self.list_version.wrapping_add(1);
         if !self.query.text.trim().is_empty() {
@@ -328,6 +367,294 @@ impl UiState {
         }
         if view == View::Podcast {
             self.refresh_podcast_subscriptions();
+        }
+        if view == View::Jamendo {
+            self.refresh_jamendo_favorites();
+        }
+        if view == View::Playlists {
+            self.refresh_playlists();
+            self.reload_playlist_items();
+        }
+    }
+
+    pub fn refresh_playlists(&mut self) {
+        match self.backend.playlists() {
+            Ok(playlists) => {
+                self.playlist_keys = playlists
+                    .iter()
+                    .map(|playlist| format!("playlist-{}", playlist.id.get()))
+                    .collect();
+                self.playlists = playlists;
+                if let Some(id) = self.selected_playlist {
+                    match self.playlists.iter().find(|playlist| playlist.id == id) {
+                        Some(playlist) => self.selected_playlist_name = playlist.name.clone(),
+                        None => {
+                            self.selected_playlist = None;
+                            self.selected_playlist_name.clear();
+                            self.playlist_items.clear();
+                            self.playlist_item_keys.clear();
+                            self.playlist_selected_item = None;
+                        }
+                    }
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn reload_playlist_items(&mut self) {
+        let Some(id) = self.selected_playlist else {
+            self.playlist_items.clear();
+            self.playlist_item_keys.clear();
+            self.playlist_selected_item = None;
+            return;
+        };
+        match self.backend.playlist_items(id) {
+            Ok(items) => {
+                self.playlist_item_keys = items
+                    .iter()
+                    .map(|item| format!("playlist-item-{}", item.id.get()))
+                    .collect();
+                self.playlist_items = items;
+                if let Some(selected) = self.playlist_selected_item
+                    && !self.playlist_items.iter().any(|item| item.id == selected)
+                {
+                    self.playlist_selected_item = None;
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+        self.list_version = self.list_version.wrapping_add(1);
+    }
+
+    pub fn open_playlist(&mut self, id: PlaylistId) {
+        let Some(playlist) = self.playlists.iter().find(|playlist| playlist.id == id) else {
+            return;
+        };
+        self.selected_playlist = Some(id);
+        self.selected_playlist_name = playlist.name.clone();
+        self.playlist_name = TextEdit::new(&playlist.name);
+        self.playlist_selected_item = None;
+        self.playlist_status = None;
+        self.reload_playlist_items();
+    }
+
+    pub fn create_playlist(&mut self) {
+        let name = self.playlist_name.text.trim().to_string();
+        if name.is_empty() {
+            self.error = Some(i18n::PLAYLIST_NAME_REQUIRED.into());
+            return;
+        }
+        match self.backend.create_playlist(&name) {
+            Ok(id) => {
+                self.playlist_name.clear();
+                self.refresh_playlists();
+                self.open_playlist(id);
+                self.playlist_status = Some(i18n::PLAYLIST_CREATED.into());
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn rename_selected_playlist(&mut self) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        let name = self.playlist_name.text.trim().to_string();
+        if name.is_empty() {
+            self.error = Some(i18n::PLAYLIST_NAME_REQUIRED.into());
+            return;
+        }
+        match self.backend.rename_playlist(id, &name) {
+            Ok(()) => {
+                self.selected_playlist_name = name;
+                self.refresh_playlists();
+                self.playlist_status = Some(i18n::PLAYLIST_RENAMED.into());
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn delete_selected_playlist(&mut self) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        match self.backend.delete_playlist(id) {
+            Ok(()) => {
+                self.selected_playlist = None;
+                self.selected_playlist_name.clear();
+                self.playlist_items.clear();
+                self.playlist_item_keys.clear();
+                self.playlist_selected_item = None;
+                self.refresh_playlists();
+                self.playlist_status = Some(i18n::PLAYLIST_DELETED.into());
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn add_tracks_to_selected_playlist(&mut self, tracks: Vec<Track>) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        let tracks: Vec<Track> = tracks
+            .into_iter()
+            .filter(|track| !matches!(track.source.scheme(), "radio" | "podcast"))
+            .collect();
+        if tracks.is_empty() {
+            self.playlist_status = Some(i18n::PLAYLIST_NO_TRACKS.into());
+            return;
+        }
+        match self.backend.add_tracks_to_playlist(id, &tracks) {
+            Ok(count) => {
+                self.refresh_playlists();
+                self.reload_playlist_items();
+                self.playlist_status = Some(i18n::playlist_added(count));
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn add_track_to_selected_playlist(&mut self, track: Track) {
+        self.add_tracks_to_selected_playlist(vec![track]);
+    }
+
+    pub fn add_current_to_selected_playlist(&mut self) {
+        let Some(item) = self.current.clone() else {
+            self.playlist_status = Some(i18n::PLAYLIST_NO_CURRENT.into());
+            return;
+        };
+        self.add_track_to_selected_playlist(item.track);
+    }
+
+    pub fn add_queue_to_selected_playlist(&mut self) {
+        let tracks: Vec<Track> = self.queue.iter().map(|item| item.track.clone()).collect();
+        if tracks.is_empty() {
+            self.playlist_status = Some(i18n::EMPTY_QUEUE.into());
+            return;
+        }
+        self.add_tracks_to_selected_playlist(tracks);
+    }
+
+    pub fn save_queue_as_playlist(&mut self) {
+        let name = self.playlist_name.text.trim().to_string();
+        if name.is_empty() {
+            self.error = Some(i18n::PLAYLIST_NAME_REQUIRED.into());
+            return;
+        }
+        let tracks: Vec<Track> = self
+            .queue
+            .iter()
+            .map(|item| item.track.clone())
+            .filter(|track| !matches!(track.source.scheme(), "radio" | "podcast"))
+            .collect();
+        if tracks.is_empty() {
+            self.playlist_status = Some(i18n::PLAYLIST_NO_TRACKS.into());
+            return;
+        }
+        match self.backend.save_queue_as_playlist(&name, &tracks) {
+            Ok(id) => {
+                self.playlist_name.clear();
+                self.refresh_playlists();
+                self.open_playlist(id);
+                self.playlist_status = Some(i18n::PLAYLIST_SAVED_QUEUE.into());
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn select_playlist_item(&mut self, id: PlaylistItemId) {
+        self.playlist_selected_item = Some(id);
+        self.list_version = self.list_version.wrapping_add(1);
+    }
+
+    pub fn play_selected_playlist(&mut self) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        self.backend.play_playlist(id);
+    }
+
+    pub fn enqueue_selected_playlist(&mut self) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        self.backend.enqueue_playlist(id);
+    }
+
+    pub fn remove_playlist_item(&mut self, item_id: PlaylistItemId) {
+        match self.backend.remove_playlist_item(item_id) {
+            Ok(removed) => {
+                if removed {
+                    self.playlist_selected_item = None;
+                    self.refresh_playlists();
+                    self.reload_playlist_items();
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn move_playlist_item(&mut self, item_id: PlaylistItemId, delta: i32) {
+        let Some(id) = self.selected_playlist else {
+            return;
+        };
+        match self.backend.move_playlist_item(id, item_id, delta) {
+            Ok(moved) => {
+                if moved {
+                    self.playlist_selected_item = Some(item_id);
+                    self.reload_playlist_items();
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn move_selected_playlist_item(&mut self, delta: i32) {
+        if let Some(item_id) = self.playlist_selected_item {
+            self.move_playlist_item(item_id, delta);
+        }
+    }
+
+    pub fn remove_missing_playlist_items(&mut self) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        match self.backend.remove_missing_playlist_items(id) {
+            Ok(removed) => {
+                self.refresh_playlists();
+                self.reload_playlist_items();
+                self.playlist_status = Some(i18n::playlist_missing_removed(removed));
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn import_playlist(&mut self, path: &Path) {
+        match self.backend.import_playlist(path) {
+            Ok(id) => {
+                self.refresh_playlists();
+                self.open_playlist(id);
+                self.playlist_status = Some(i18n::PLAYLIST_IMPORTED.into());
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn export_playlist(&mut self, path: &Path) {
+        let Some(id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        match self.backend.export_playlist(id, path) {
+            Ok(()) => self.playlist_status = Some(i18n::PLAYLIST_EXPORTED.into()),
+            Err(error) => self.error = Some(error),
         }
     }
 
@@ -468,6 +795,80 @@ impl UiState {
                     entry.watched = watched;
                 }
                 self.list_version = self.list_version.wrapping_add(1);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn refresh_jamendo_favorites(&mut self) {
+        match self.backend.source_favorites("jamendo") {
+            Ok(items) => {
+                self.jamendo_loading = false;
+                self.jamendo_offline = false;
+                self.set_jamendo_items(items);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn search_jamendo(&mut self) {
+        let text = self.jamendo_query.text.trim().to_string();
+        let tag = self.jamendo_tag.text.trim().to_string();
+        if text.is_empty() && tag.is_empty() {
+            self.refresh_jamendo_favorites();
+            return;
+        }
+        self.jamendo_loading = true;
+        self.jamendo_offline = false;
+        let mut query = SourceQuery {
+            text,
+            ..SourceQuery::default()
+        };
+        if !tag.is_empty() {
+            query.set_filter("tag", tag);
+        }
+        self.backend.source_search("jamendo", query);
+    }
+
+    fn set_jamendo_items(&mut self, items: Vec<SourceItem>) {
+        self.jamendo_keys = items
+            .iter()
+            .map(|item| format!("jamendo-{}", item.id))
+            .collect();
+        self.jamendo_items = items;
+        self.list_version = self.list_version.wrapping_add(1);
+    }
+
+    pub fn toggle_jamendo_favorite(&mut self, id: &str) {
+        match self.backend.source_toggle_favorite("jamendo", id) {
+            Ok(favorite) => {
+                if let Some(item) = self.jamendo_items.iter_mut().find(|item| item.id == id) {
+                    item.favorite = favorite;
+                }
+                self.list_version = self.list_version.wrapping_add(1);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn play_jamendo(&mut self, id: &str) {
+        self.backend.source_play("jamendo", id);
+    }
+
+    pub fn add_jamendo_to_selected_playlist(&mut self, id: &str) {
+        let Some(playlist_id) = self.selected_playlist else {
+            self.error = Some(i18n::PLAYLIST_SELECT.into());
+            return;
+        };
+        match self
+            .backend
+            .add_source_to_playlist(playlist_id, "jamendo", id)
+        {
+            Ok(0) => self.playlist_status = Some(i18n::PLAYLIST_NO_TRACKS.into()),
+            Ok(count) => {
+                self.refresh_playlists();
+                self.reload_playlist_items();
+                self.playlist_status = Some(i18n::playlist_added(count));
             }
             Err(error) => self.error = Some(error),
         }
@@ -790,6 +1191,12 @@ impl UiState {
                 items,
                 offline,
             } => {
+                if source == "jamendo" {
+                    self.jamendo_loading = false;
+                    self.jamendo_offline = offline;
+                    self.set_jamendo_items(items);
+                    return true;
+                }
                 if source == "podcast" {
                     self.podcast_loading = false;
                     self.set_podcast_items(items);
@@ -810,6 +1217,11 @@ impl UiState {
                 request_id: _,
                 message,
             } => {
+                if source == "jamendo" {
+                    self.jamendo_loading = false;
+                    self.error = Some(message);
+                    return true;
+                }
                 if source == "podcast" {
                     self.podcast_loading = false;
                     self.error = Some(message);
@@ -842,6 +1254,15 @@ impl UiState {
                 true
             }
             Event::SourceArtwork { source, id, path } => {
+                if source == "jamendo" {
+                    let Some(item) = self.jamendo_items.iter_mut().find(|item| item.id == id)
+                    else {
+                        return false;
+                    };
+                    item.image_path = Some(path);
+                    self.list_version = self.list_version.wrapping_add(1);
+                    return true;
+                }
                 if source == "podcast" {
                     let Some(item) = self.podcast_items.iter_mut().find(|item| item.id == id)
                     else {
@@ -929,6 +1350,22 @@ pub fn on_key(state: &mut UiState, event: &KeyEvent, tx: &mut Tx) -> bool {
             state.previous();
             true
         }
+        Key::Up if event.mods.alt && state.view == View::Playlists => {
+            if state.playlist_selected_item.is_some() {
+                state.move_selected_playlist_item(-1);
+                true
+            } else {
+                false
+            }
+        }
+        Key::Down if event.mods.alt && state.view == View::Playlists => {
+            if state.playlist_selected_item.is_some() {
+                state.move_selected_playlist_item(1);
+                true
+            } else {
+                false
+            }
+        }
         Key::Right if event.mods.ctrl => {
             state.next();
             true
@@ -976,9 +1413,12 @@ pub fn scenes() -> &'static [Scene] {
         ("search", scene_search),
         ("albums", scene_albums),
         ("artists", scene_artists),
+        ("playlists", scene_playlists),
         ("sources", scene_sources),
+        ("sources-jamendo", scene_sources_jamendo),
         ("radio", scene_radio),
         ("podcast", scene_podcast),
+        ("jamendo", scene_jamendo),
     ]
 }
 
@@ -1027,6 +1467,11 @@ fn scene_sources(state: &mut UiState) {
     state.view = View::Sources;
 }
 
+fn scene_sources_jamendo(state: &mut UiState) {
+    state.view = View::Sources;
+    state.jamendo_available = true;
+}
+
 fn scene_radio(state: &mut UiState) {
     state.view = View::Radio;
     state.source_items = vec![
@@ -1039,6 +1484,8 @@ fn scene_radio(state: &mut UiState) {
             uri: "https://stream.example/jazz".into(),
             favorite: true,
             image_path: None,
+            duration: None,
+            license_url: None,
         },
         musify_core::SourceItem {
             id: "demo-electro".into(),
@@ -1049,6 +1496,8 @@ fn scene_radio(state: &mut UiState) {
             uri: "https://stream.example/electro".into(),
             favorite: false,
             image_path: None,
+            duration: None,
+            license_url: None,
         },
     ];
     state.source_keys = state
@@ -1065,6 +1514,100 @@ fn scene_radio(state: &mut UiState) {
     state.playback = PlaybackState::Playing;
 }
 
+fn scene_playlists(state: &mut UiState) {
+    state.view = View::Playlists;
+    let id = PlaylistId::new(1);
+    state.playlists = vec![Playlist {
+        id,
+        name: "Mix serale".into(),
+        created_at: 0,
+        updated_at: 0,
+        item_count: 3,
+    }];
+    state.playlist_keys = vec!["playlist-1".into()];
+    state.selected_playlist = Some(id);
+    state.selected_playlist_name = "Mix serale".into();
+    state.playlist_name = TextEdit::new("Mix serale");
+    state.playlist_items = vec![
+        demo_playlist_item(1, id, 0, "Città", 200, true),
+        demo_playlist_item(2, id, 1, "Notturno", 245, true),
+        demo_playlist_item(3, id, 2, "Brano rimosso", 180, false),
+    ];
+    state.playlist_item_keys = state
+        .playlist_items
+        .iter()
+        .map(|item| format!("playlist-item-{}", item.id.get()))
+        .collect();
+}
+
+fn demo_playlist_item(
+    item_id: i64,
+    playlist_id: PlaylistId,
+    position: u32,
+    title: &str,
+    seconds: u64,
+    available: bool,
+) -> PlaylistItem {
+    let path = PathBuf::from(format!("C:/Music/{title}.mp3"));
+    PlaylistItem {
+        id: PlaylistItemId::new(item_id),
+        playlist_id,
+        position,
+        source: musify_core::SourceId::local(&path),
+        item_id: path.to_string_lossy().into_owned(),
+        title: title.into(),
+        artist: "Artist".into(),
+        album: "Album".into(),
+        duration: Duration::from_secs(seconds),
+        cover_path: None,
+        available,
+    }
+}
+
+fn scene_jamendo(state: &mut UiState) {
+    state.view = View::Jamendo;
+    state.jamendo_available = true;
+    state.jamendo_items = vec![musify_core::SourceItem {
+        id: "42".into(),
+        source: musify_core::SourceId::jamendo("https://audio.example/42.mp3"),
+        title: "Creative Track".into(),
+        subtitle: "Demo Artist · Demo Album".into(),
+        detail: "CC BY-SA".into(),
+        uri: "https://audio.example/42.mp3".into(),
+        favorite: false,
+        image_path: None,
+        duration: Some(Duration::from_secs(215)),
+        license_url: Some("https://creativecommons.org/licenses/by-sa/3.0/".into()),
+    }];
+    state.jamendo_keys = vec!["jamendo-42".into()];
+    state.current = Some(QueueItem {
+        id: QueueItemId::new(1),
+        track: musify_jamendo_track(),
+    });
+    state.playback = PlaybackState::Playing;
+    state.duration = Some(Duration::from_secs(215));
+    state.position = Duration::from_secs(42);
+}
+
+fn musify_jamendo_track() -> Track {
+    Track {
+        id: TrackId::new(4242),
+        source: musify_core::SourceId::jamendo("https://audio.example/42.mp3"),
+        path: PathBuf::new(),
+        title: "Creative Track".into(),
+        artist: "Demo Artist".into(),
+        album: "Demo Album · CC BY-SA · Jamendo".into(),
+        album_artist: None,
+        track_number: None,
+        disc_number: None,
+        duration: Duration::from_secs(215),
+        year: None,
+        genre: Some("CC BY-SA".into()),
+        cover_path: None,
+        added_at: 0,
+    }
+}
+
 fn scene_podcast(state: &mut UiState) {
     state.view = View::Podcast;
     state.podcast_items = vec![musify_core::SourceItem {
@@ -1076,6 +1619,8 @@ fn scene_podcast(state: &mut UiState) {
         uri: "https://example.com/feed.xml".into(),
         favorite: true,
         image_path: None,
+        duration: None,
+        license_url: None,
     }];
     state.podcast_keys = state
         .podcast_items

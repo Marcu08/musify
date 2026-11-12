@@ -47,6 +47,10 @@ impl SourceRegistry {
         );
     }
 
+    pub(crate) fn contains(&self, source: &str) -> bool {
+        self.entries.contains_key(source)
+    }
+
     pub(crate) fn search(&self, source: &str, query: SourceQuery) {
         let Some(entry) = self.entries.get(source) else {
             let _ = self.events.send(Event::SourceSearchFailed {
@@ -347,6 +351,8 @@ mod tests {
                 uri: title.to_string(),
                 favorite: false,
                 image_path: None,
+                duration: None,
+                license_url: None,
             }
         }
     }

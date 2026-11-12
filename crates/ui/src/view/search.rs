@@ -93,6 +93,7 @@ fn track_row(s: &UiState, track: &musify_core::Track) -> El {
         i18n::duration_text(track.duration)
     };
     let value = track.clone();
+    let add_track = track.clone();
     row()
         .key(format!("search-track-{}", track.id.get()))
         .w_full()
@@ -125,6 +126,11 @@ fn track_row(s: &UiState, track: &musify_core::Track) -> El {
                 .w(200.0),
         )
         .child(text(duration).font(theme::TIME).color(p.text_secondary))
+        .child(
+            common::small_action(i18n::PLAYLIST_ADD).on_press(move |s: &mut UiState| {
+                s.add_track_to_selected_playlist(add_track.clone());
+            }),
+        )
 }
 
 fn album_row(s: &UiState, album: &musify_core::Album) -> El {

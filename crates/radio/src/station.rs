@@ -103,6 +103,8 @@ impl Station {
             uri: self.stream_url().to_string(),
             favorite,
             image_path: None,
+            duration: None,
+            license_url: None,
         }
     }
 }

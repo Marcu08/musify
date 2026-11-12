@@ -10,11 +10,11 @@ mod traits;
 
 pub use command::Command;
 pub use domain::{
-    Album, Artist, LibraryStats, PlaybackState, Playlist, QueueItem, RepeatMode, SearchResults,
-    SortDirection, SourceEntry, SourceId, SourceItem, Track, TrackSort,
+    Album, Artist, LibraryStats, PlaybackState, Playlist, PlaylistItem, QueueItem, RepeatMode,
+    SearchResults, SortDirection, SourceEntry, SourceId, SourceItem, Track, TrackSort,
 };
 pub use event::{Event, StreamEvent, StreamStatus};
-pub use ids::{AlbumId, ArtistId, PlaylistId, QueueItemId, TrackId};
+pub use ids::{AlbumId, ArtistId, PlaylistId, PlaylistItemId, QueueItemId, TrackId};
 pub use traits::{
     LibraryError, LibraryProvider, ResolvedSource, SourceError, SourcePlayback, SourceProvider,
     SourceQuery, SourceSearch,

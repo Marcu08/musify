@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use musify_audio::AudioEngine;
 use musify_core::{
-    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, RepeatMode,
-    SearchResults, SourceEntry, SourceId, SourceItem, SourcePlayback, SourceQuery, Track, TrackId,
-    TrackSort,
+    Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, Playlist,
+    PlaylistId, PlaylistItem, PlaylistItemId, RepeatMode, SearchResults, SourceEntry, SourceId,
+    SourceItem, SourcePlayback, SourceQuery, Track, TrackId, TrackSort,
 };
+use musify_jamendo::{JamendoSource, JamendoStore};
 use musify_library::{Library, LibraryWatcher};
 use musify_podcast::{PodcastSource, PodcastStore};
 use musify_radio::{RadioBrowser, RadioStore};
@@ -91,6 +92,25 @@ impl AppBackend {
         let mut sources = SourceRegistry::new(event_tx.clone(), Arc::clone(&waker));
         sources.register(radio);
         sources.register(podcast);
+        let jamendo_enabled =
+            std::env::var("MUSIFY_JAMENDO_CLIENT_ID").is_ok_and(|value| !value.trim().is_empty());
+        if jamendo_enabled {
+            match JamendoStore::open(&data_dir.join("jamendo.sqlite3")) {
+                Ok(store) => {
+                    if let Some(jamendo) =
+                        JamendoSource::from_env(Arc::new(store), data_dir.join("jamendo-covers"))
+                    {
+                        sources.register(Arc::new(jamendo));
+                        tracing::info!("Jamendo source enabled");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Jamendo store unavailable; source disabled");
+                }
+            }
+        } else {
+            tracing::info!("Jamendo source disabled: MUSIFY_JAMENDO_CLIENT_ID is not set");
+        }
 
         let audio = if std::env::var("MUSIFY_NO_AUDIO").as_deref() == Ok("1") {
             None
@@ -605,6 +625,137 @@ impl Backend for AppBackend {
         self.sources.set_watched(source, id, watched)
     }
 
+    fn source_available(&self, source: &str) -> bool {
+        self.sources.contains(source)
+    }
+
+    fn add_source_to_playlist(
+        &self,
+        playlist_id: PlaylistId,
+        source: &str,
+        id: &str,
+    ) -> Result<usize, String> {
+        let resolved = self.sources.resolve(source, id)?;
+        self.library
+            .add_tracks_to_playlist(playlist_id, &[resolved.track])
+            .map_err(|error| error.to_string())
+    }
+
+    fn playlists(&self) -> Result<Vec<Playlist>, String> {
+        self.library.playlists().map_err(|error| error.to_string())
+    }
+
+    fn playlist_items(&self, id: PlaylistId) -> Result<Vec<PlaylistItem>, String> {
+        self.library
+            .playlist_items(id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn create_playlist(&self, name: &str) -> Result<PlaylistId, String> {
+        self.library
+            .create_playlist(name)
+            .map_err(|error| error.to_string())
+    }
+
+    fn rename_playlist(&self, id: PlaylistId, name: &str) -> Result<(), String> {
+        self.library
+            .rename_playlist(id, name)
+            .map_err(|error| error.to_string())
+    }
+
+    fn delete_playlist(&self, id: PlaylistId) -> Result<(), String> {
+        self.library
+            .delete_playlist(id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn add_tracks_to_playlist(&self, id: PlaylistId, tracks: &[Track]) -> Result<usize, String> {
+        self.library
+            .add_tracks_to_playlist(id, tracks)
+            .map_err(|error| error.to_string())
+    }
+
+    fn remove_playlist_item(&self, item_id: PlaylistItemId) -> Result<bool, String> {
+        self.library
+            .remove_playlist_item(item_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn move_playlist_item(
+        &self,
+        playlist_id: PlaylistId,
+        item_id: PlaylistItemId,
+        delta: i32,
+    ) -> Result<bool, String> {
+        self.library
+            .move_playlist_item(playlist_id, item_id, delta)
+            .map_err(|error| error.to_string())
+    }
+
+    fn remove_missing_playlist_items(&self, id: PlaylistId) -> Result<usize, String> {
+        self.library
+            .remove_missing_playlist_items(id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn play_playlist(&self, id: PlaylistId) {
+        match playlist_playback_command(&self.library, id) {
+            Ok(Some(command)) => self.send_audio(command),
+            Ok(None) => {
+                let _ = self.events_tx.send(Event::Error {
+                    context: "playlist".into(),
+                    message: PLAYLIST_EMPTY.into(),
+                });
+                wake(&self.waker);
+            }
+            Err(message) => {
+                let _ = self.events_tx.send(Event::Error {
+                    context: "playlist".into(),
+                    message,
+                });
+                wake(&self.waker);
+            }
+        }
+    }
+
+    fn enqueue_playlist(&self, id: PlaylistId) {
+        match self.library.playlist_tracks(id) {
+            Ok(tracks) if !tracks.is_empty() => self.send_audio(Command::Enqueue(tracks)),
+            Ok(_) => {
+                let _ = self.events_tx.send(Event::Error {
+                    context: "playlist".into(),
+                    message: PLAYLIST_EMPTY.into(),
+                });
+                wake(&self.waker);
+            }
+            Err(error) => {
+                let _ = self.events_tx.send(Event::Error {
+                    context: "playlist".into(),
+                    message: error.to_string(),
+                });
+                wake(&self.waker);
+            }
+        }
+    }
+
+    fn save_queue_as_playlist(&self, name: &str, tracks: &[Track]) -> Result<PlaylistId, String> {
+        self.library
+            .save_queue_as_playlist(name, tracks)
+            .map_err(|error| error.to_string())
+    }
+
+    fn import_playlist(&self, path: &Path) -> Result<PlaylistId, String> {
+        self.library
+            .import_m3u8(path)
+            .map_err(|error| error.to_string())
+    }
+
+    fn export_playlist(&self, id: PlaylistId, path: &Path) -> Result<(), String> {
+        self.library
+            .export_m3u8(id, path)
+            .map_err(|error| error.to_string())
+    }
+
     fn playback_settings(&self) -> (u16, bool, RepeatMode) {
         self.config
             .lock()
@@ -723,6 +874,21 @@ impl ScanCoordinator {
     }
 }
 
+const PLAYLIST_EMPTY: &str = "la playlist non contiene brani disponibili";
+
+fn playlist_playback_command(library: &Library, id: PlaylistId) -> Result<Option<Command>, String> {
+    let tracks = library
+        .playlist_tracks(id)
+        .map_err(|error| error.to_string())?;
+    if tracks.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Command::PlayTracks {
+        tracks,
+        start_index: 0,
+    }))
+}
+
 fn send_event(events: &Sender<Event>, waker: &Arc<Mutex<Option<Waker>>>, event: Event) {
     let _ = events.send(event);
     wake(waker);
@@ -732,5 +898,73 @@ fn wake(waker: &Arc<Mutex<Option<Waker>>>) {
     let task = waker.lock().ok().and_then(|guard| guard.as_ref().cloned());
     if let Some(task) = task {
         task();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::path::Path;
+    use std::time::Duration;
+
+    use musify_core::{SourceId, TrackId};
+
+    use super::*;
+
+    fn track(path: &Path, title: &str) -> Track {
+        Track {
+            id: TrackId::new(1),
+            source: SourceId::local(path),
+            path: path.to_path_buf(),
+            title: title.into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            album_artist: None,
+            track_number: None,
+            disc_number: None,
+            duration: Duration::from_secs(10),
+            year: None,
+            genre: None,
+            cover_path: None,
+            added_at: 0,
+        }
+    }
+
+    #[test]
+    fn play_playlist_builds_a_play_tracks_command_and_skips_missing_files() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let library = Library::open(
+            dir.path().join("library.sqlite3"),
+            dir.path().join("covers"),
+        )
+        .expect("library");
+        let a = dir.path().join("a.mp3");
+        let b = dir.path().join("b.mp3");
+        std::fs::write(&a, b"a").expect("a");
+        std::fs::write(&b, b"b").expect("b");
+        let id = library.create_playlist("Playlist").expect("playlist");
+        library
+            .add_tracks_to_playlist(id, &[track(&a, "A"), track(&b, "B")])
+            .expect("add");
+        match playlist_playback_command(&library, id).expect("command") {
+            Some(Command::PlayTracks {
+                tracks,
+                start_index,
+            }) => {
+                assert_eq!(start_index, 0);
+                assert_eq!(tracks.len(), 2);
+                assert_eq!(tracks[0].title, "A");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+        std::fs::remove_file(&a).expect("remove a");
+        match playlist_playback_command(&library, id).expect("command") {
+            Some(Command::PlayTracks { tracks, .. }) => {
+                assert_eq!(tracks.len(), 1);
+                assert_eq!(tracks[0].title, "B");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

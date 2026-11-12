@@ -2260,6 +2260,7 @@ dependencies = [
  "crossbeam-channel",
  "musify-audio",
  "musify-core",
+ "musify-jamendo",
  "musify-library",
  "musify-podcast",
  "musify-radio",
@@ -2267,6 +2268,7 @@ dependencies = [
  "serde",
  "serde_json",
  "souvlaki",
+ "tempfile",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -2298,6 +2300,24 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "musify-jamendo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "image",
+ "musify-core",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

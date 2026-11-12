@@ -3,6 +3,7 @@
 
 mod cover;
 mod db;
+mod playlists;
 mod scanner;
 mod watcher;
 
@@ -39,6 +40,8 @@ pub enum LibraryError {
     Cover(String),
     #[error("invalid library path: {0}")]
     Path(String),
+    #[error("invalid library query: {0}")]
+    Query(String),
     #[error("filesystem watcher error: {0}")]
     Watcher(String),
 }

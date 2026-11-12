@@ -236,7 +236,7 @@ impl Library {
         Ok(tracks)
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>, LibraryError> {
+    pub(crate) fn lock(&self) -> Result<MutexGuard<'_, Connection>, LibraryError> {
         self.connection
             .lock()
             .map_err(|_| LibraryError::Database("database lock poisoned".into()))
@@ -271,7 +271,9 @@ fn core_error(error: LibraryError) -> CoreLibraryError {
     match error {
         LibraryError::Database(message) => CoreLibraryError::Database(message),
         LibraryError::Io(error) => CoreLibraryError::Io(error.to_string()),
-        LibraryError::Cover(message) => CoreLibraryError::Query(message),
+        LibraryError::Cover(message) | LibraryError::Query(message) => {
+            CoreLibraryError::Query(message)
+        }
         LibraryError::Path(message) => CoreLibraryError::Query(message),
         LibraryError::Watcher(message) => CoreLibraryError::Io(message),
     }
@@ -324,18 +326,6 @@ pub(crate) fn init_schema(connection: &Connection) -> Result<bool, LibraryError>
         );
         CREATE INDEX IF NOT EXISTS tracks_album_idx ON tracks(album_id, disc_number, track_number);
         CREATE INDEX IF NOT EXISTS tracks_artist_idx ON tracks(artist_id);
-        CREATE TABLE IF NOT EXISTS playlists (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS playlist_tracks (
-            playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
-            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-            position INTEGER NOT NULL,
-            PRIMARY KEY (playlist_id, position)
-        );
         "#,
     )?;
 
@@ -381,7 +371,65 @@ pub(crate) fn init_schema(connection: &Connection) -> Result<bool, LibraryError>
     if fts && (!had_fts || !had_triggers) {
         connection.execute("INSERT INTO tracks_fts(tracks_fts) VALUES ('rebuild')", [])?;
     }
+    migrate_playlists(connection)?;
     Ok(fts)
+}
+
+/// Versioned migration for the playlist tables. Version 0 is the historical
+/// schema with `playlist_tracks`; version 2 stores generic, source-agnostic
+/// entries with a metadata snapshot. Existing rows are copied before the old
+/// table is dropped.
+fn migrate_playlists(connection: &Connection) -> Result<(), LibraryError> {
+    const SCHEMA_VERSION: i64 = 2;
+    connection.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS playlist_items (
+            id INTEGER PRIMARY KEY,
+            playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            source_scheme TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL DEFAULT '',
+            album TEXT NOT NULL DEFAULT '',
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            cover_path TEXT,
+            UNIQUE(playlist_id, position)
+        );
+        CREATE INDEX IF NOT EXISTS playlist_items_playlist
+            ON playlist_items(playlist_id, position);
+        "#,
+    )?;
+    let has_legacy: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'playlist_tracks')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_legacy {
+        connection.execute_batch(
+            r#"
+            INSERT OR IGNORE INTO playlist_items
+                (playlist_id, position, source_scheme, item_id, title, artist, album,
+                 duration_ms, cover_path)
+            SELECT pl.playlist_id, pl.position, 'local', t.path, t.title, t.artist, t.album,
+                   t.duration_ms, t.cover_path
+            FROM playlist_tracks pl
+            JOIN tracks t ON t.id = pl.track_id;
+            DROP TABLE playlist_tracks;
+            "#,
+        )?;
+    }
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version < SCHEMA_VERSION {
+        connection.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    }
+    Ok(())
 }
 
 fn track_order(sort: TrackSort, direction: SortDirection) -> &'static str {

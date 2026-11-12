@@ -26,7 +26,27 @@ pub fn view(s: &UiState) -> El {
         i18n::SOURCE_OPEN,
         View::Podcast,
     );
-    col()
+    let cards = if s.jamendo_available {
+        let jamendo = source_card(
+            i18n::JAMENDO_TITLE,
+            i18n::SOURCES_JAMENDO_CAPTION,
+            i18n::SOURCE_OPEN,
+            View::Jamendo,
+        );
+        col()
+            .w_full()
+            .gap(14.0)
+            .child(row().w_full().gap(14.0).child(local).child(radio))
+            .child(row().w_full().gap(14.0).child(podcast).child(jamendo))
+    } else {
+        row()
+            .w_full()
+            .gap(14.0)
+            .child(local)
+            .child(radio)
+            .child(podcast)
+    };
+    let mut content = col()
         .w_full()
         .h_full()
         .px(26.0)
@@ -41,15 +61,28 @@ pub fn view(s: &UiState) -> El {
                 .font(theme::ROW_META)
                 .color(p.text_secondary),
         )
-        .child(
-            row()
+        .child(cards);
+    if !s.jamendo_available {
+        content = content.child(
+            col()
                 .w_full()
-                .gap(14.0)
-                .child(local)
-                .child(radio)
-                .child(podcast),
-        )
-        .child(el().h(12.0))
+                .gap(4.0)
+                .padding(14.0)
+                .radius(theme::RADIUS)
+                .fill(p.card)
+                .child(
+                    text(i18n::JAMENDO_NOT_CONFIGURED)
+                        .font(theme::SECTION_TITLE)
+                        .color(p.text),
+                )
+                .child(
+                    text(i18n::JAMENDO_CONFIG_HINT)
+                        .font(theme::ROW_META)
+                        .color(p.text_secondary),
+                ),
+        );
+    }
+    content.child(el().h(12.0))
 }
 
 fn source_card(title: &'static str, caption: &str, action: &'static str, view: View) -> El {

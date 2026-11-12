@@ -127,6 +127,7 @@ fn track_row(s: &UiState, index: usize) -> El {
         .is_some_and(|item| item.track.id == track.id)
         && s.playback != musify_core::PlaybackState::Stopped;
     let id = track.id;
+    let add_track = track.clone();
     let title = common::unknown_title(&track.title);
     let artist = common::unknown_artist(&track.artist);
     let album = common::unknown_album(&track.album);
@@ -185,6 +186,11 @@ fn track_row(s: &UiState, index: usize) -> El {
                 .font(theme::TIME)
                 .color(p.text_secondary)
                 .w(54.0),
+        )
+        .child(
+            common::small_action(i18n::PLAYLIST_ADD).on_press(move |s: &mut UiState| {
+                s.add_track_to_selected_playlist(add_track.clone());
+            }),
         );
     row_el.on_press(move |s: &mut UiState| s.play_track(id))
 }

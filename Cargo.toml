@@ -4,6 +4,7 @@ members = [
     "crates/app",
     "crates/audio",
     "crates/core",
+    "crates/jamendo",
     "crates/library",
     "crates/podcast",
     "crates/radio",
@@ -24,6 +25,7 @@ musify-audio = { path = "crates/audio" }
 musify-library = { path = "crates/library" }
 musify-radio = { path = "crates/radio" }
 musify-podcast = { path = "crates/podcast" }
+musify-jamendo = { path = "crates/jamendo" }
 musify-ui = { path = "crates/ui" }
 
 anyhow = "1"

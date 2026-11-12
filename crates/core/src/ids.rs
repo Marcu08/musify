@@ -34,6 +34,7 @@ id_type!(TrackId, i64);
 id_type!(AlbumId, i64);
 id_type!(ArtistId, i64);
 id_type!(PlaylistId, i64);
+id_type!(PlaylistItemId, i64);
 id_type!(QueueItemId, u64);
 
 #[cfg(test)]

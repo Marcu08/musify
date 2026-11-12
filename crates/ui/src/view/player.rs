@@ -18,6 +18,10 @@ pub fn view(s: &UiState) -> El {
         .current
         .as_ref()
         .is_some_and(|item| item.track.source.scheme() == "podcast");
+    let jamendo = s
+        .current
+        .as_ref()
+        .is_some_and(|item| item.track.source.scheme() == "jamendo");
     let current_title = s.current.as_ref().map_or_else(
         || i18n::NO_TRACK.to_string(),
         |item| {
@@ -60,6 +64,33 @@ pub fn view(s: &UiState) -> El {
         7.0,
         &current_title,
     );
+    let mut source_line = row()
+        .gap(6.0)
+        .center_y()
+        .child(text(status_label).font(theme::TINY).color(p.accent))
+        .child(
+            text(i18n::source_label(
+                s.current
+                    .as_ref()
+                    .map_or("local", |item| item.track.source.scheme()),
+            ))
+            .font(theme::TINY)
+            .color(p.text_secondary),
+        );
+    if jamendo
+        && let Some(license) = s.current.as_ref().and_then(|item| {
+            item.track.genre.as_deref().or_else(|| {
+                let album = item.track.album.trim();
+                (!album.is_empty()).then_some(album)
+            })
+        })
+    {
+        source_line = source_line.child(
+            text(license.to_string())
+                .font(theme::TINY)
+                .color(p.text_secondary),
+        );
+    }
 
     let left = row().w(280.0).gap(12.0).center_y().child(cover).child(
         col()
@@ -76,21 +107,7 @@ pub fn view(s: &UiState) -> El {
                 .font(theme::PLAYER_META)
                 .color(p.text_secondary),
             )
-            .child(
-                row()
-                    .gap(6.0)
-                    .center_y()
-                    .child(text(status_label).font(theme::TINY).color(p.accent))
-                    .child(
-                        text(i18n::source_label(
-                            s.current
-                                .as_ref()
-                                .map_or("local", |item| item.track.source.scheme()),
-                        ))
-                        .font(theme::TINY)
-                        .color(p.text_secondary),
-                    ),
-            ),
+            .child(source_line),
     );
 
     let controls = row()

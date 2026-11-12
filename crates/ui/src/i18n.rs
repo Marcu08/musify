@@ -20,11 +20,13 @@ pub const NAV_PODCAST: &str = "Podcast";
 pub const SOURCE_LOCAL: &str = "Locale";
 pub const SOURCE_RADIO: &str = "Radio";
 pub const SOURCE_PODCAST: &str = "Podcast";
+pub const SOURCE_JAMENDO: &str = "Jamendo";
 pub const SOURCES_TITLE: &str = "Fonti";
 pub const SOURCES_HINT: &str = "Scegli da dove viene la musica.";
 pub const SOURCE_OPEN: &str = "Apri";
 pub const SOURCES_RADIO_CAPTION: &str = "Radio Browser · preferiti offline";
 pub const SOURCES_PODCAST_CAPTION: &str = "iTunes Search · RSS · episodi e ripresa";
+pub const SOURCES_JAMENDO_CAPTION: &str = "Creative Commons · streaming · Jamendo";
 pub const RADIO_TITLE: &str = "Radio internet";
 pub const RADIO_HINT: &str = "Cerca stazioni con Radio Browser. I preferiti restano sul computer e funzionano anche offline.";
 pub const RADIO_NAME: &str = "Nome";
@@ -63,6 +65,62 @@ pub const PODCAST_MARK_UNWATCHED: &str = "Non ascoltato";
 pub const PODCAST_WATCHED: &str = "Ascoltato";
 pub const PODCAST_RESUME: &str = "Riprendi a";
 pub const NOT_SEEKABLE: &str = "Stream non seekable";
+
+pub const JAMENDO_TITLE: &str = "Jamendo";
+pub const JAMENDO_HINT: &str =
+    "Musica Creative Commons da Jamendo. Solo streaming: nessun download né copia dei file.";
+pub const JAMENDO_SEARCH_PLACEHOLDER: &str = "Brano o artista";
+pub const JAMENDO_TAG_PLACEHOLDER: &str = "Tag / genere";
+pub const JAMENDO_SEARCH: &str = "Cerca";
+pub const JAMENDO_FAVORITES: &str = "Preferiti";
+pub const JAMENDO_EMPTY: &str = "Nessun brano trovato";
+pub const JAMENDO_EMPTY_HINT: &str = "Prova un altro brano, artista o tag.";
+pub const JAMENDO_LOADING: &str = "Ricerca Jamendo…";
+pub const JAMENDO_OFFLINE: &str = "Offline: mostro i risultati salvati";
+pub const JAMENDO_PLAY: &str = "Ascolta";
+pub const JAMENDO_TRACK_PAGE: &str = "Jamendo";
+pub const JAMENDO_NOT_CONFIGURED: &str = "Jamendo non configurato";
+pub const JAMENDO_CONFIG_HINT: &str = "Imposta la variabile d'ambiente MUSIFY_JAMENDO_CLIENT_ID con il client id del tuo account sviluppatore Jamendo e riavvia Musify.";
+
+pub const NAV_PLAYLISTS: &str = "Playlist";
+pub const PLAYLISTS_TITLE: &str = "Playlist";
+pub const PLAYLISTS_HINT: &str = "Crea raccolte, riordina i brani e importa o esporta file M3U8.";
+pub const PLAYLIST_NAME: &str = "Nome playlist";
+pub const PLAYLIST_CREATE: &str = "Crea";
+pub const PLAYLIST_RENAME: &str = "Rinomina";
+pub const PLAYLIST_DELETE: &str = "Elimina";
+pub const PLAYLIST_PLAY: &str = "Riproduci playlist";
+pub const PLAYLIST_ENQUEUE: &str = "Aggiungi alla coda";
+pub const PLAYLIST_SAVE_QUEUE: &str = "Salva coda come playlist";
+pub const PLAYLIST_IMPORT: &str = "Importa M3U8";
+pub const PLAYLIST_EXPORT: &str = "Esporta M3U8";
+pub const PLAYLIST_ADD_CURRENT: &str = "Aggiungi brano corrente";
+pub const PLAYLIST_ADD_QUEUE: &str = "Aggiungi coda";
+pub const PLAYLIST_ADD: &str = "+";
+pub const PLAYLIST_REMOVE_MISSING: &str = "Rimuovi mancanti";
+pub const PLAYLIST_EMPTY: &str = "Nessuna playlist";
+pub const PLAYLIST_EMPTY_HINT: &str = "Crea una playlist o importa un file M3U8.";
+pub const PLAYLIST_SELECT: &str = "Scegli una playlist";
+pub const PLAYLIST_SELECT_HINT: &str = "Seleziona una playlist per vedere e gestire i brani.";
+pub const PLAYLIST_NO_ITEMS: &str = "Playlist vuota";
+pub const PLAYLIST_NO_ITEMS_HINT: &str =
+    "Aggiungi brani dalla libreria, dalla ricerca, dalla coda o dal brano corrente.";
+pub const PLAYLIST_MISSING: &str = "File non trovato";
+pub const PLAYLIST_MOVE_UP: &str = "↑";
+pub const PLAYLIST_MOVE_DOWN: &str = "↓";
+pub const PLAYLIST_REMOVE_ITEM: &str = "×";
+pub const PLAYLIST_REORDER_HINT: &str =
+    "Seleziona un brano e usa Alt+↑/↓ oppure i pulsanti Su/Giù.";
+pub const PLAYLIST_NAME_REQUIRED: &str = "Inserisci un nome per la playlist.";
+pub const PLAYLIST_CREATED: &str = "Playlist creata.";
+pub const PLAYLIST_RENAMED: &str = "Playlist rinominata.";
+pub const PLAYLIST_DELETED: &str = "Playlist eliminata.";
+pub const PLAYLIST_IMPORTED: &str = "Playlist importata.";
+pub const PLAYLIST_EXPORTED: &str = "Playlist esportata.";
+pub const PLAYLIST_SAVED_QUEUE: &str = "Coda salvata come playlist.";
+pub const PLAYLIST_NO_CURRENT: &str = "Nessun brano in riproduzione.";
+pub const PLAYLIST_NO_TRACKS: &str =
+    "Nessun brano aggiungibile: radio e podcast non sono supportati nelle playlist.";
 
 pub const SEARCH_PLACEHOLDER: &str = "Cerca brani, album, artisti";
 pub const SEARCH_EMPTY: &str = "Nessun risultato";
@@ -117,7 +175,7 @@ pub const AUDIO_TITLE: &str = "Uscita audio";
 pub const AUDIO_UNAVAILABLE: &str = "Nessun dispositivo audio disponibile";
 pub const LIBRARY_TITLE: &str = "Libreria";
 pub const SHORTCUTS_TITLE: &str = "Scorciatoie";
-pub const SHORTCUTS: &str = "Spazio: play/pausa · ←/→: cerca ±5 s · Ctrl+←/→: brano precedente/successivo · Ctrl+F: cerca · Ctrl+R: riscansiona · Esc: chiudi ricerca";
+pub const SHORTCUTS: &str = "Spazio: play/pausa · ←/→: cerca ±5 s · Ctrl+←/→: brano precedente/successivo · Alt+↑/↓: riordina playlist · Ctrl+F: cerca · Ctrl+R: riscansiona · Esc: chiudi ricerca";
 pub const SCAN_RUNNING: &str = "Scansione in corso";
 pub const SCAN_IDLE: &str = "Libreria aggiornata";
 
@@ -150,6 +208,35 @@ pub fn queue_count(count: usize) -> String {
     match count {
         1 => "1 brano in coda".into(),
         n => format!("{n} brani in coda"),
+    }
+}
+
+pub fn playlists_count(count: usize) -> String {
+    match count {
+        1 => "1 playlist".into(),
+        n => format!("{n} playlist"),
+    }
+}
+
+pub fn playlist_items_count(count: usize) -> String {
+    match count {
+        1 => "1 brano".into(),
+        n => format!("{n} brani"),
+    }
+}
+
+pub fn playlist_added(count: usize) -> String {
+    match count {
+        1 => "1 brano aggiunto alla playlist.".into(),
+        n => format!("{n} brani aggiunti alla playlist."),
+    }
+}
+
+pub fn playlist_missing_removed(count: usize) -> String {
+    match count {
+        0 => "Nessun file mancante da rimuovere.".into(),
+        1 => "1 elemento mancante rimosso.".into(),
+        n => format!("{n} elementi mancanti rimossi."),
     }
 }
 
@@ -225,6 +312,7 @@ pub fn source_label(scheme: &str) -> &'static str {
         "local" => SOURCE_LOCAL,
         "radio" => SOURCE_RADIO,
         "podcast" => SOURCE_PODCAST,
+        "jamendo" => SOURCE_JAMENDO,
         _ => "Sorgente",
     }
 }

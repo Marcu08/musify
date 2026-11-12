@@ -379,6 +379,8 @@ impl PodcastSource {
             uri: podcast.feed_url.clone(),
             favorite: podcast.subscribed,
             image_path: self.cover_path(podcast),
+            duration: None,
+            license_url: None,
         }
     }
 

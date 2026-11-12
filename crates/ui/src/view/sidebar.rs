@@ -26,6 +26,7 @@ pub fn view(s: &UiState) -> El {
     let tracks = nav_button(s, View::Tracks, i18n::NAV_TRACKS);
     let albums = nav_button(s, View::Albums, i18n::NAV_ALBUMS);
     let artists = nav_button(s, View::Artists, i18n::NAV_ARTISTS);
+    let playlists = nav_button(s, View::Playlists, i18n::NAV_PLAYLISTS);
     let queue = nav_button(s, View::Queue, i18n::NAV_QUEUE);
     let settings = nav_button(s, View::Settings, i18n::NAV_SETTINGS);
 
@@ -91,6 +92,7 @@ pub fn view(s: &UiState) -> El {
         .child(tracks)
         .child(albums)
         .child(artists)
+        .child(playlists)
         .child(common::section_label(i18n::NAV_PLAYBACK))
         .child(queue)
         .child(spacer())
@@ -110,8 +112,9 @@ fn nav_button(s: &UiState, view: View, label: &'static str) -> El {
                 View::Tracks => s.stats.tracks.to_string(),
                 View::Albums => s.stats.albums.to_string(),
                 View::Artists => s.stats.artists.to_string(),
+                View::Playlists => s.playlists.len().to_string(),
                 View::Queue => s.queue.len().to_string(),
-                View::Sources | View::Radio | View::Podcast => String::new(),
+                View::Sources | View::Radio | View::Podcast | View::Jamendo => String::new(),
                 View::Settings => String::new(),
             })
             .font(theme::TINY)

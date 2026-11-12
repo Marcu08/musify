@@ -4,7 +4,8 @@ use crate::i18n;
 use crate::state::{UiState, View};
 use crate::theme::{self, palette};
 use crate::view::{
-    albums, artists, common, podcast, queue, radio, search, settings, sources, tracks,
+    albums, artists, common, jamendo, playlists, podcast, queue, radio, search, settings, sources,
+    tracks,
 };
 
 pub fn view(s: &UiState) -> El {
@@ -15,10 +16,12 @@ pub fn view(s: &UiState) -> El {
             View::Tracks => tracks::view(s),
             View::Albums => albums::view(s),
             View::Artists => artists::view(s),
+            View::Playlists => playlists::view(s),
             View::Queue => queue::view(s),
             View::Sources => sources::view(s),
             View::Radio => radio::view(s),
             View::Podcast => podcast::view(s),
+            View::Jamendo => jamendo::view(s),
             View::Settings => settings::view(s),
         }
     };

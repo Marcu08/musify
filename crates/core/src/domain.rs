@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AlbumId, ArtistId, PlaylistId, QueueItemId, TrackId};
+use crate::{AlbumId, ArtistId, PlaylistId, PlaylistItemId, QueueItemId, TrackId};
 
 /// Identifies where a queue item comes from.
 ///
@@ -38,6 +38,11 @@ impl SourceId {
     #[must_use]
     pub fn podcast(url: impl Into<String>) -> Self {
         Self::new("podcast", url)
+    }
+
+    #[must_use]
+    pub fn jamendo(url: impl Into<String>) -> Self {
+        Self::new("jamendo", url)
     }
 
     #[must_use]
@@ -95,7 +100,7 @@ impl Track {
     /// Finite HTTP resources can seek and must not reconnect as live streams.
     #[must_use]
     pub fn is_on_demand(&self) -> bool {
-        self.source.scheme() == "podcast"
+        matches!(self.source.scheme(), "podcast" | "jamendo")
     }
 }
 
@@ -111,6 +116,10 @@ pub struct SourceItem {
     pub uri: String,
     pub favorite: bool,
     pub image_path: Option<PathBuf>,
+    #[serde(default)]
+    pub duration: Option<Duration>,
+    #[serde(default)]
+    pub license_url: Option<String>,
 }
 
 /// One entry (for example a podcast episode) inside a source item.
@@ -165,6 +174,25 @@ pub struct Playlist {
     pub name: String,
     pub created_at: i64,
     pub updated_at: i64,
+    pub item_count: u32,
+}
+
+/// One source-agnostic entry in a playlist. The snapshot keeps the entry
+/// visible when the original source is unavailable; `available` is computed
+/// when the list is read and is not persisted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistItem {
+    pub id: PlaylistItemId,
+    pub playlist_id: PlaylistId,
+    pub position: u32,
+    pub source: SourceId,
+    pub item_id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration: Duration,
+    pub cover_path: Option<PathBuf>,
+    pub available: bool,
 }
 
 /// One slot in the playback queue. The id stays stable when the queue is reordered.
@@ -266,6 +294,16 @@ mod tests {
         assert!(!radio.is_local());
         assert_eq!(radio.scheme(), "radio");
         assert_eq!(radio.uri(), "https://stream.example/live.mp3");
+    }
+
+    #[test]
+    fn jamendo_tracks_are_on_demand_streams() {
+        let mut item = track();
+        item.source = SourceId::jamendo("https://audio.example/track.mp3");
+        assert!(!item.is_local());
+        assert!(item.is_on_demand());
+        assert_eq!(item.source.scheme(), "jamendo");
+        assert_eq!(item.source.uri(), "https://audio.example/track.mp3");
     }
 
     #[test]
