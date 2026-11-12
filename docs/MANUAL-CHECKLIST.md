@@ -1,8 +1,8 @@
 # Checklist manuale — Musify
 
-Data: 2026-11-10
-Ambito: M6.1 (HTTP Range e podcast), M5.2 (registro fonti), M5.1/M5 (radio)
-e M4 (Windows).
+Data: 2026-11-11
+Ambito: M7.2 (Jamendo), M7.1 (playlist), M6.1 (HTTP Range e podcast),
+M5.2 (registro fonti), M5.1/M5 (radio) e M4 (Windows).
 Queste verifiche richiedono una finestra reale, il mixer di Windows o la sessione
 utente: non sono automatizzabili in modo affidabile. Eseguirle su una build
 release (`cargo build -p musify --release`) e annotare data, DPI e dispositivo
@@ -143,7 +143,60 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 | Controllare Task Manager a riposo con Podcast aperto | Nessun polling o runtime di rete attivo: la CPU resta a 0,0-0,3%. |
 | Controllare `%APPDATA%\Musify\` | `podcasts.sqlite3` e `podcast-covers/` contengono solo iscrizioni, episodi e copertine usate. |
 
-## 9. Riposo
+## 9. Playlist (M7.1)
+
+| Passo | Risultato atteso |
+| --- | --- |
+| Aprire Playlist nella barra laterale | La vista mostra il campo nome, Crea, l'elenco playlist e Importa M3U8. |
+| Creare una playlist dal nome | Compare nell'elenco con conteggio 0 e viene selezionata. |
+| Rinominarla e riavviare Musify | Il nuovo nome resta; nessun file aggiuntivo in `%APPDATA%\Musify\`. |
+| Aggiungere un brano dalla libreria con `+` | Il brano compare nella playlist selezionata; il conteggio si aggiorna. |
+| Cercare un brano e usare `+` nel risultato | Il brano viene aggiunto alla playlist selezionata. |
+| Aggiungere dalla coda con `+` e con `Aggiungi coda` | I brani locali entrano nella playlist; radio e podcast vengono ignorati con un messaggio chiaro. |
+| Con un brano in riproduzione, premere `Aggiungi brano corrente` | Il brano corrente entra nella playlist. |
+| Selezionare un elemento e usare ↑/↓ e `Alt+↑`/`Alt+↓` | L'ordine cambia e resta dopo il riavvio; il drag del mouse non è richiesto. |
+| Premere `Riproduci playlist` | La coda viene sostituita e parte il primo brano disponibile. |
+| Premere `Aggiungi alla coda` | I brani vengono accodati senza interrompere la riproduzione corrente. |
+| Con una coda locale, premere `Salva coda come playlist` | Viene creata una playlist con i brani della coda. |
+| Rimuovere un file dal disco e riaprire la playlist | La riga resta visibile in grigio con `File non trovato`. |
+| Riprodurre una playlist con un file mancante | Il file viene saltato senza errori; gli altri brani suonano. |
+| Premere `Rimuovi mancanti` | Gli elementi mancanti spariscono e le posizioni restano compatte. |
+| Esportare in M3U8 con percorsi relativi e assoluti | Il file è UTF-8, contiene `#EXTM3U`/`#EXTINF` e si riapre con un player esterno. |
+| Importare lo stesso M3U8 | Viene creata una playlist con titolo, artista e durata corretti. |
+| Eliminare una playlist | Sparisce dall'elenco; i file musicali restano su disco. |
+| Controllare `%APPDATA%\Musify\library.sqlite3` | Le tabelle `playlists` e `playlist_items` contengono i dati; non esiste `playlist_tracks`. |
+
+Verificare che una migrazione da una build precedente mantenga le playlist
+esistenti e che `PRAGMA user_version` valga 2.
+
+## 10. Jamendo (M7.2)
+
+Configurare il client id solo nella sessione corrente (non scriverlo nel
+repository, nei log o negli screenshot):
+
+```powershell
+$env:MUSIFY_JAMENDO_CLIENT_ID = "<client id>"
+```
+
+| Passo | Risultato atteso |
+| --- | --- |
+| Avviare Musify con la variabile impostata | In Fonti compare la scheda Jamendo; il log dice solo `Jamendo source enabled`, mai la chiave. |
+| Aprire Fonti → Jamendo | La vista mostra i campi Brano o artista, Tag/genere, Cerca e Preferiti. |
+| Cercare un brano o un artista | Arrivano risultati con titolo, artista, album, durata, copertina, etichetta CC e link Jamendo. |
+| Cliccare l'etichetta CC e il link Jamendo | Il browser apre rispettivamente la licenza Creative Commons e la pagina del brano su Jamendo. |
+| Premere Ascolta | L'audio parte; la barra mostra durata e stato; l'overlay SMTC mostra titolo, artista, album con licenza/Jamendo e copertina. |
+| Trascinare la barra di seek | Se il server supporta Range, la riproduzione riparte dalla posizione scelta; altrimenti compare `Stream non seekable`. |
+| Salvare un preferito e riavviare | Il preferito resta; la ricerca con rete assente entro 24 h mostra i risultati in cache con l'avviso offline. |
+| Aggiungere un risultato alla playlist M7.1 con `+` | Il brano compare nella playlist selezionata con lo snapshot; riproducendolo funziona lo streaming OnDemand. |
+| Controllare `%APPDATA%\Musify\` | Esistono solo `jamendo.sqlite3` e `jamendo-covers/` (max 64 file / 8 MB); nessun file audio scaricato. |
+| Rimuovere la variabile e riavviare | La scheda Jamendo non compare; Fonti mostra `Jamendo non configurato` con la variabile da impostare. |
+| Controllare i log | Nessuna occorrenza del client id, nessun URL con `client_id`, nessun runtime di rete a riposo. |
+
+La prova manuale completa (ricerca, ascolto, seek, playlist) richiede una
+sessione audio reale e la chiave dell'utente; i test automatici usano solo un
+server finto e non toccano la rete.
+
+## 11. Riposo
 
 | Passo | Risultato atteso |
 | --- | --- |

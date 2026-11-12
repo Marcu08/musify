@@ -53,6 +53,16 @@ un commit preciso e confinata al crate `musify-ui`.
 - **Podcast (M6.1)**: ricerca con iTunes Search, parsing RSS con `feed-rs`,
   iscrizioni, elenco episodi con data/durata/descrizione, stato ascoltato e
   posizione di ripresa in SQLite. I feed si aggiornano solo su richiesta.
+- **Playlist (M7.1)**: raccolte locali con elementi generici per fonte, snapshot
+  di titolo/artista/album/durata/copertina, riordino con pulsanti e Alt+↑/↓,
+  import/export M3U8 UTF-8. I file mancanti restano visibili in grigio e vengono
+  saltati in riproduzione. Radio e podcast restano fuori dalle playlist.
+- **Jamendo (M7.2)**: fonte `jamendo://` tramite `SourceProvider`, ricerca per
+  brano/artista/tag, streaming MP3 OnDemand con seek quando il server lo
+  consente, cache risultati 24 h, preferiti SQLite, copertine limitate e
+  attribuzione Creative Commons con link a Jamendo. Richiede
+  `MUSIFY_JAMENDO_CLIENT_ID`; senza chiave la fonte non compare e la UI spiega
+  come configurarla. Solo streaming: nessun download.
 - **HTTP Range**: gli episodi MP3/AAC con `Accept-Ranges` sono seekable tramite
   richieste `Range`; la riconnessione riparte dall’offset in byte. Se il server
   non supporta Range, l’episodio resta riproducibile ma la UI indica che non è
@@ -89,6 +99,14 @@ un commit preciso e confinata al crate `musify-ui`.
 | --- | --- |
 | ![Ripristino](docs/evidence/musify-restored.png) | ![SMTC](docs/evidence/musify-smtc.png) |
 
+| Playlist |
+| --- |
+| ![Playlist](docs/evidence/m71-playlists.png) |
+
+| Jamendo | Fonti |
+| --- | --- |
+| ![Jamendo](docs/evidence/m72-jamendo.png) | ![Fonti](docs/evidence/m72-sources-jamendo.png) |
+
 ## Requisiti
 
 - Windows 10/11 x86_64.
@@ -124,6 +142,20 @@ Controlli locali equivalenti alla CI:
 powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 ```
 
+### Hook Git
+
+Il repository include hook versionati in `.githooks/`. Attivali una volta per
+clone:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+Il `pre-commit` esegue lo scan segreti (`scripts/check-secrets.ps1`) e
+`cargo fmt --all -- --check`; il `pre-push` esegue clippy e test. Su Windows gli
+hook girano con Git Bash e richiamano PowerShell per lo scan. Dettagli e regole
+di sicurezza in [docs/GIT-WORKFLOW.md](docs/GIT-WORKFLOW.md).
+
 ## Scorciatoie
 
 | Tasto | Azione |
@@ -131,6 +163,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 | `Spazio` | Play / pausa |
 | `←` / `→` | Seek ±5 secondi |
 | `Ctrl+←` / `Ctrl+→` | Brano precedente / successivo |
+| `Alt+↑` / `Alt+↓` | Sposta il brano selezionato nella playlist |
 | `Ctrl+F` | Cerca |
 | `Ctrl+R` | Riscansiona la libreria |
 | `+` / `-` | Volume su / giù |
@@ -159,9 +192,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 | --- | --- |
 | `musify-core` | tipi di dominio, `Command`/`Event`, trait `SourceProvider` e `LibraryProvider` |
 | `musify-audio` | decodifica, output, coda, seek, volume, gapless |
-| `musify-library` | scanner incrementale, SQLite, ricerca, copertine, watcher |
+| `musify-library` | scanner incrementale, SQLite, ricerca, copertine, watcher, playlist |
 | `musify-radio` | `SourceProvider` Radio Browser, cache e preferiti SQLite |
 | `musify-podcast` | `SourceProvider` iTunes Search, RSS, iscrizioni/episodi SQLite |
+| `musify-jamendo` | `SourceProvider` Jamendo, cache/preferiti SQLite, copertine |
 | `musify-ui` | presentazione Rune, nessuna logica di dominio |
 | `musify-app` | binario, config, registro fonti, SMTC, persistenza, coda |
 
@@ -169,7 +203,7 @@ Dettagli completi in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Misure reali
 
-Release, Windows 11, Ryzen 5 5625U (6 core / 12 thread), 7,9 GB RAM,
+Release, Windows 11, Ryzen 5 5625U (6 core / 12 thread), 7,3 GB RAM,
 cache shader calda. Non sono numeri di laboratorio: sono le misure fatte su
 questa macchina.
 
@@ -182,14 +216,25 @@ questa macchina.
 | UI in riproduzione locale | **6,55% di un core**, **0,55%** su 12 thread | < 2% |
 | Radio MP3 128 kbps | **7,65% di un core**, **0,64%** su 12 thread | < 2% |
 | Podcast MP3 con Range | **8,58% di un core**, **0,71%** su 12 thread | < 2% |
-| Avvio app completa | **1,10 s** mediana (min 1,05, max 1,72) | < 300 ms |
-| RAM | **185 MB** a riposo, 188 MB locale, 195 MB radio, 194 MB podcast | < 80 MB |
+| Avvio app completa M7.1 | **1,49 s** mediana (min 1,48, max 2,38); baseline stessa sessione 2,04 s | < 300 ms |
+| RAM M7.1 | private bytes **169,9 MB** a riposo (baseline 170,6); working set variabile (124,7 MB nell'ultima serie) | < 80 MB |
 
 I target di **avvio** e **RAM** non sono stati raggiunti: Rune/wgpu e
 l'inizializzazione GPU sono la parte dominante. La UI a riposo non ridisegna.
 Tutti i dettagli e i problemi noti sono nei report delle milestone; il metodo e
 i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
-[M45-FINAL](docs/M45-FINAL.md).
+[M45-FINAL](docs/M45-FINAL.md). Per M7.1 la baseline `aca8763` è stata misurata
+nella stessa sessione: avvio e private bytes non mostrano un aumento misurabile,
+mentre il working set varia con la cache shader e con i trim di Windows. La CPU
+di riproduzione locale nella sessione M7.1 è 9,51% di un core (baseline 9,67%):
+il percorso audio non è cambiato. Dettagli in
+[M7.1](docs/M71-PLAYLIST-REPORT.md).
+
+Per M7.2, senza chiave Jamendo i private bytes a riposo restano 170,2 MB; con la
+chiave configurata salgono a 171,6 MB (+1,4 MB per la connessione SQLite e il
+provider) e lo startup misurato è 1,62 s (1,91 s senza chiave nella stessa
+serie). La fonte non crea runtime di rete all'avvio. Dettagli e valori grezzi in
+[M7.2](docs/M72-JAMENDO-REPORT.md).
 
 ## Milestone
 
@@ -205,6 +250,8 @@ i valori grezzi sono in [M45-BASELINE](docs/M45-BASELINE.md) e
 | M5.1 — Rifinitura CPU e radio | radio completata; CPU non ridotta | [M5.1](docs/M51-REPORT.md) |
 | M5.2 — Pulizia e astrazione fonti | completata | [M5.2](docs/M52-REPORT.md) |
 | M6.1 — Podcast e HTTP Range | completata | [M6.1](docs/M61-PODCAST-REPORT.md) |
+| M7.1 — Playlist | completata | [M7.1](docs/M71-PLAYLIST-REPORT.md) |
+| M7.2 — Jamendo | completata | [M7.2](docs/M72-JAMENDO-REPORT.md) |
 
 ## Sviluppo
 
@@ -228,7 +275,10 @@ Gli asset audio di test sono minuscoli e già nel repository. Per rigenerarli:
 
 Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 (separate da `;`), `MUSIFY_NO_AUDIO=1`, `MUSIFY_NO_SMTC=1`, `RUNE_READY_DIR`,
-`MUSIFY_AUTOPLAY_RADIO=<url>`, `MUSIFY_AUTOPLAY_PODCAST=<url>`.
+`MUSIFY_AUTOPLAY_RADIO=<url>`, `MUSIFY_AUTOPLAY_PODCAST=<url>`,
+`MUSIFY_JAMENDO_CLIENT_ID=<client id>` (obbligatoria per la fonte Jamendo),
+`MUSIFY_JAMENDO_API_URL=<url>` e `MUSIFY_JAMENDO_CACHE_TTL_HOURS=<ore>`
+(queste ultime solo per test/sviluppo).
 
 ## Dati dell'applicazione
 
@@ -236,12 +286,14 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 | --- | --- |
 | `%APPDATA%\Musify\config.toml` | cartelle musicali, volume, shuffle, repeat |
 | `%APPDATA%\Musify\state.json` | coda, brano corrente, posizione |
-| `%APPDATA%\Musify\library.sqlite3` | indice della libreria |
+| `%APPDATA%\Musify\library.sqlite3` | indice della libreria, playlist e elementi |
 | `%APPDATA%\Musify\covers\` | cache copertine JPEG |
 | `%APPDATA%\Musify\radio.sqlite3` | cache ricerche e stazioni preferite |
 | `%APPDATA%\Musify\radio-icons\` | favicon radio, massimo 256 file / 16 MB |
 | `%APPDATA%\Musify\podcasts.sqlite3` | iscrizioni, episodi, ascoltato e ripresa |
 | `%APPDATA%\Musify\podcast-covers\` | copertine podcast, massimo 64 file / 8 MB |
+| `%APPDATA%\Musify\jamendo.sqlite3` | cache ricerche e preferiti Jamendo |
+| `%APPDATA%\Musify\jamendo-covers\` | copertine Jamendo, massimo 64 file / 8 MB |
 
 ## Limiti noti
 
@@ -273,14 +325,40 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 - Il seek podcast richiede un server HTTP con `Accept-Ranges: bytes`. Senza
   Range l'episodio parte ma la barra è disabilitata e la UI mostra
   `Stream non seekable`.
-- Il registro fonti contiene radio e podcast; non ci sono client API o flussi
-  non implementati.
+- Le playlist accettano brani locali e Jamendo; radio e podcast restano esclusi.
+- L'import M3U8 crea una nuova playlist dal nome del file; non unisce a una
+  playlist esistente. I percorsi relativi sono risolti rispetto al file M3U8 e
+  le righe con schema URI (`http://`, `jamendo://`, …) vengono ignorate.
+- Il riordino delle playlist usa i pulsanti ↑/↓ e `Alt+↑`/`Alt+↓`; il drag del
+  mouse non è previsto.
+- I metadati nelle playlist sono snapshot: se i tag del file cambiano, la
+  playlist non si aggiorna da sola.
+- Il registro fonti contiene radio, podcast e Jamendo; non ci sono client API o
+  flussi non implementati.
+- Jamendo richiede `MUSIFY_JAMENDO_CLIENT_ID`: senza chiave la fonte non compare
+  e la vista Fonti mostra come configurarla. La chiave non viene mai salvata nel
+  repository, nei log o negli screenshot.
+- Jamendo è usato solo per uso personale/non commerciale, entro i limiti
+  dell'API (1 richiesta/s nel client, backoff su 429/5xx, cache 24 h). Non
+  vengono mai usati `audiodownload`/`audiodownload_allowed`: solo l'URL `audio`
+  in streaming, senza copiare i file su disco.
+- Le copertine Jamendo sono in cache limitata (64 file / 8 MB); i risultati
+  della ricerca hanno TTL 24 h. Senza rete e senza cache valida la ricerca
+  mostra l'errore.
+- L'attribuzione Jamendo è visibile nei risultati (licenza CC e link alla pagina
+  del brano) e in SMTC tramite album/artista; i brani Jamendo possono entrare
+  nelle playlist M7.1.
 
 ## Note legali
 
 Musify è un progetto personale. Non aggira DRM, non registra, non scarica e non
 distribuisce flussi protetti. Usa solo fonti pubbliche e API autorizzate; nessun
 token o segreto viene salvato nel repository o nei log.
+
+La fonte Jamendo usa l'API pubblica per uso non commerciale secondo gli
+[Api Terms of Use](https://devportal.jamendo.com/api_terms_of_use): i brani sono
+Creative Commons, l'attribuzione resta agli artisti e a Jamendo e l'app non
+offre download né accesso offline ai contenuti.
 
 ## Crediti
 

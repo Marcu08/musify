@@ -9,9 +9,10 @@ la UI comunica solo con comandi ed eventi.
 | --- | --- | --- |
 | `musify-core` | tipi di dominio, `Command`, `Event`, trait `SourceProvider` e `LibraryProvider` | no |
 | `musify-audio` | decodifica (symphonia), output (cpal/WASAPI), coda, seek, volume | no |
-| `musify-library` | scanner (walkdir + lofty), indice SQLite, ricerca, cache copertine | no |
+| `musify-library` | scanner (walkdir + lofty), indice SQLite, ricerca, cache copertine, playlist | no |
 | `musify-radio` | `SourceProvider` Radio Browser, cache e preferiti SQLite | no |
 | `musify-podcast` | `SourceProvider` iTunes Search, RSS, iscrizioni/episodi SQLite | no |
+| `musify-jamendo` | `SourceProvider` Jamendo, cache/preferiti SQLite, copertine | no |
 | `musify-ui` | viste e input Rune; traduce gesti in `Command` e applica `Event` | sì |
 | `musify-app` | config, logging, registro fonti, SMTC, persistenza, coda | no |
 
@@ -254,6 +255,80 @@ UI Podcast
 - La UI distingue radio e podcast: la radio mostra `LIVE`, il podcast mostra la
   durata e abilita il seek solo dopo `SeekableChanged(true)`.
 
+## Playlist (M7.1)
+
+```text
+UI Playlist
+  ├─ Backend.playlists/playlist_items ──▶ Library (SQLite)
+  ├─ create/rename/delete/add/remove/move
+  ├─ play_playlist ──▶ Command::PlayTracks (file mancanti saltati)
+  ├─ enqueue_playlist ──▶ Command::Enqueue
+  └─ import/export M3U8 ──▶ Library (UTF-8, #EXTINF, path relativi/assoluti)
+```
+
+- Lo schema è versionato con `PRAGMA user_version = 2`. La migrazione crea
+  `playlists` e `playlist_items`, copia le vecchie righe di `playlist_tracks`
+  negli snapshot e poi elimina la tabella legacy. I dati esistenti non vengono
+  persi; la migrazione è idempotente e coperta da test.
+- `playlist_items` è generica per fonte: `source_scheme`, `item_id`, `position`
+  e snapshot di `title`, `artist`, `album`, `duration_ms`, `cover_path`. Per i
+  brani locali `item_id` è il path; per le fonti future è l'URI della fonte.
+  `available` non è persistito: viene calcolato alla lettura (`Path::is_file()`
+  per `local`, sempre vero per le altre fonti).
+- Radio e podcast sono esclusi dalle playlist: il filtro è applicato sia nella
+  UI sia in `Library::add_tracks_to_playlist`, così una chiamata futura non può
+  inserirli per errore.
+- `playlist_playback_command` costruisce `Command::PlayTracks` con i soli
+  elementi disponibili. Se la playlist è vuota o tutti i file mancano, l'app
+  emette un `Event::Error` leggibile invece di avviare una coda vuota.
+  `enqueue_playlist` usa la stessa selezione.
+- La UI ha una vista dedicata con pannello playlist e lista virtualizzata. Le
+  azioni sono pulsanti (crea, rinomina, elimina, riproduci, accoda, salva coda,
+  importa/esporta, aggiungi brano corrente/coda, rimuovi mancanti); il riordino
+  usa ↑/↓ e `Alt+↑`/`Alt+↓` sull'elemento selezionato, senza drag.
+- M3U8: export UTF-8 con `#EXTM3U`/`#EXTINF`, path relativo quando il file è
+  sotto la cartella dell'export, altrimenti path assoluto; import che risolve i
+  path rispetto al file e ignora le righe con schema URI. Il round-trip è
+  coperto da test con metadati non ASCII.
+- Il trait `ui::Backend` espone i metodi playlist con default, così i backend di
+  test restano compilabili; `AppBackend` li inoltra alla libreria.
+
+## Jamendo (M7.2)
+
+```text
+UI Jamendo
+  ├─ source_search("jamendo") ──▶ JamendoSource::search
+  │     ├─ GET api.jamendo.com/v3.0/tracks (client_id, search/tags, audioformat=mp32)
+  │     ├─ rate limit 1/s + backoff su 429/5xx/errori di rete
+  │     ├─ cache SQLite 24 h come fallback
+  │     └─ SourceItem (audio, license_ccurl, album_image, duration, shareurl)
+  └─ source_play("jamendo") ──▶ resolve (solo DB)
+        └─ Command::PlayTrack (Track.source = jamendo://audio-url, OnDemand)
+              └─ HttpStream::OnDemand (Range/seek)
+```
+
+- `musify-jamendo` implementa `SourceProvider` con schema `jamendo`. Il client id
+  arriva solo da `MUSIFY_JAMENDO_CLIENT_ID`: se manca, l'app non registra la
+  fonte, non apre `jamendo.sqlite3` e la vista Fonti mostra come configurarla.
+- Il provider non legge `audiodownload` né `audiodownload_allowed`: usa solo il
+  campo `audio` in streaming. Nessun byte audio viene scritto su disco; le
+  copertine stanno in `jamendo-covers` (64 file / 8 MB).
+- La ricerca è network-first con fallback a una cache SQLite di 24 h; preferiti
+  e metadati dei brani stanno in `jamendo.sqlite3`. `resolve` è solo DB, quindi
+  la riproduzione non blocca la UI su una richiesta di rete; la rete vive nel
+  thread di ricerca del registro fonti.
+- Il client usa uno user-agent identificabile, limita le richieste a 1/s,
+  ritenta 429/5xx/errori di rete con backoff esponenziale e redige il client id
+  dai messaggi di errore.
+- `Track::is_on_demand` include `jamendo`, quindi `HttpStream::OnDemand` gestisce
+  gli stream finiti e il seek Range. `Track.album` contiene
+  `album · licenza · Jamendo` per l'attribuzione in SMTC; la UI mostra licenza e
+  link alla licenza CC e alla pagina del brano Jamendo.
+- I brani Jamendo entrano nelle playlist M7.1 tramite
+  `Backend::add_source_to_playlist`: il backend risolve l'elemento e salva il
+  consueto snapshot, con `source_scheme = "jamendo"` e l'URL audio come
+  `item_id`.
+
 ## Libreria locale (M2)
 
 ```text
@@ -274,14 +349,18 @@ cartelle musicali
   (`init_schema` fallisce) usa `LIKE` con escape di `%`, `_` e `\`.
 - `notify` osserva le cartelle e, dopo 750 ms di quiete, emette un segnale;
   l'app lancia la scansione incrementale. Il watcher non scrive nel DB.
-- Schema: `tracks`, `albums`, `artists`, `playlists`, `playlist_tracks`.
-  Le playlist sono predisposte nello schema, la UI arriverà dopo l'MVP.
+- Schema: `tracks`, `albums`, `artists`, `playlists`, `playlist_items`.
+  `playlist_items` è la forma versionata (M7.1); `playlist_tracks` è la tabella
+  legacy, copiata e rimossa dalla migrazione.
 
 ## Persistenza
 
 - `config.toml`: cartelle musicali, volume, shuffle/repeat, preferenze UI.
 - `state.json`: coda, brano corrente, posizione, timestamp di salvataggio.
-- `library.sqlite3`: brani, album, artisti, playlist, stato della scansione.
+- `library.sqlite3`: brani, album, artisti, playlist, elementi delle playlist,
+  stato della scansione.
+- `jamendo.sqlite3`: cache ricerche, metadati dei brani e preferiti Jamendo.
+- `jamendo-covers/`: copertine Jamendo, massimo 64 file / 8 MB.
 - `covers/`: copertine ridimensionate, nominate per hash del contenuto.
 
 ## Decisioni
@@ -307,6 +386,14 @@ cartelle musicali
 - **M5.1**: la CPU dei ridisegni è stata strumentata ma non ridotta in modo
   riproducibile; le modifiche non provate sono state rimosse. Le cache radio
   hanno TTL e limiti su disco, le ricerche sono cancellabili e HLS è rifiutato.
+- **M7.1**: le playlist sono snapshot generici per fonte, non foreign key verso
+  `tracks`: un file spostato o una fonte futura non devono rompere la playlist.
+  La disponibilità è calcolata alla lettura e la riproduzione salta gli elementi
+  mancanti. Il riordino è esplicito (pulsanti/tastiera), non basato sul drag.
+- **M7.2**: Jamendo è una fonte opzionale registrata solo se il client id è
+  presente nell'ambiente. La rete avviene solo nella ricerca/artwork, mai in
+  `resolve` o a riposo; il client id non viene mai serializzato, loggato o
+  mostrato. Solo streaming: i campi di download dell'API non sono modellati.
 
 ## Diagrammi di dettaglio
 
