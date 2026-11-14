@@ -61,3 +61,4 @@ pub const ALBUM_CARD_H: f32 = 238.0;
 pub const PLAYER_COVER: f32 = 56.0;
 pub const RADIUS: f32 = 8.0;
 pub const RADIUS_LG: f32 = 14.0;
+pub const TRANSPARENT: Color = Color::TRANSPARENT;

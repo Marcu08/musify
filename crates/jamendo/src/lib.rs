@@ -9,5 +9,5 @@ mod store;
 
 pub use client::{JamendoOptions, JamendoSource};
 pub use error::JamendoError;
-pub use model::{JamendoTrack, license_label};
+pub use model::{JamendoSelection, JamendoTrack, license_label};
 pub use store::JamendoStore;

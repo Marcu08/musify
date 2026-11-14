@@ -74,6 +74,8 @@ impl PodcastSource {
             return Ok(SourceSearch {
                 items: self.favorites()?,
                 offline: false,
+                cached: false,
+                has_more: false,
             });
         }
         let runtime = runtime()?;
@@ -135,6 +137,8 @@ impl PodcastSource {
         Ok(SourceSearch {
             items,
             offline: false,
+            cached: false,
+            has_more: false,
         })
     }
 

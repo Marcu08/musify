@@ -16,7 +16,7 @@ use rune::{App, AppSpec};
 
 pub use backend::Backend;
 
-const WINDOW_SIZE: (f32, f32) = (1120.0, 620.0);
+const WINDOW_SIZE: (f32, f32) = (1120.0, 680.0);
 
 pub fn run(backend: Arc<dyn Backend>) {
     let backend_for_init = backend.clone();

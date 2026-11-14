@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::JamendoError;
-use crate::model::JamendoTrack;
+use crate::model::{JamendoSelection, JamendoTrack};
 
 pub struct JamendoStore {
     connection: Mutex<Connection>,
@@ -40,6 +40,16 @@ impl JamendoStore {
              );
              CREATE TABLE IF NOT EXISTS searches (
                  query_key TEXT PRIMARY KEY,
+                 payload TEXT NOT NULL,
+                 cached_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS genre_usage (
+                 tag TEXT PRIMARY KEY,
+                 uses INTEGER NOT NULL,
+                 last_used INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS selections (
+                 id TEXT PRIMARY KEY,
                  payload TEXT NOT NULL,
                  cached_at INTEGER NOT NULL
              );",
@@ -188,11 +198,134 @@ impl JamendoStore {
         Ok(())
     }
 
+    /// Records one user choice of a genre button. It is used only to decide
+    /// which genres to warm up once at startup; it is not sent to Jamendo.
+    pub fn record_genre_use(&self, tag: &str) -> Result<(), JamendoError> {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            return Ok(());
+        }
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO genre_usage (tag, uses, last_used) VALUES (?1, 1, ?2)
+             ON CONFLICT(tag) DO UPDATE SET
+                 uses = uses + 1,
+                 last_used = excluded.last_used",
+            params![tag, unix_now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn popular_genres(&self, limit: usize) -> Result<Vec<String>, JamendoError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT tag FROM genre_usage
+             ORDER BY uses DESC, last_used DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement
+            .query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+                row.get::<_, String>(0)
+            })?;
+        let mut genres = Vec::new();
+        for row in rows {
+            genres.push(row?);
+        }
+        Ok(genres)
+    }
+
+    pub fn store_selections(&self, selections: &[JamendoSelection]) -> Result<(), JamendoError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM selections", [])?;
+        let now = unix_now();
+        for selection in selections {
+            let payload = serde_json::to_string(selection)
+                .map_err(|error| JamendoError::Storage(error.to_string()))?;
+            transaction.execute(
+                "INSERT OR REPLACE INTO selections (id, payload, cached_at)
+                 VALUES (?1, ?2, ?3)",
+                params![selection.id, payload, now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn cached_selections(
+        &self,
+        max_age_secs: i64,
+    ) -> Result<Option<Vec<JamendoSelection>>, JamendoError> {
+        let connection = self.lock()?;
+        let oldest: Option<i64> = connection
+            .query_row("SELECT MIN(cached_at) FROM selections", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .optional()?
+            .flatten();
+        let Some(oldest) = oldest else {
+            return Ok(None);
+        };
+        if oldest < unix_now() - max_age_secs.max(0) {
+            return Ok(None);
+        }
+        let mut statement = connection.prepare("SELECT id, payload FROM selections")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut selections = Vec::new();
+        for row in rows {
+            let (id, payload) = row?;
+            match serde_json::from_str::<JamendoSelection>(&payload) {
+                Ok(selection) => selections.push(selection),
+                Err(_) => {
+                    connection.execute("DELETE FROM selections WHERE id = ?1", params![id])?;
+                }
+            }
+        }
+        Ok(Some(selections))
+    }
+
+    pub fn selection(&self, id: &str) -> Result<Option<JamendoSelection>, JamendoError> {
+        let connection = self.lock()?;
+        let payload: Option<String> = connection
+            .query_row(
+                "SELECT payload FROM selections WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(payload) = payload else {
+            return Ok(None);
+        };
+        match serde_json::from_str::<JamendoSelection>(&payload) {
+            Ok(selection) => Ok(Some(selection)),
+            Err(_) => {
+                connection.execute("DELETE FROM selections WHERE id = ?1", params![id])?;
+                Ok(None)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn age_selection_cache(&self, seconds: i64) -> Result<(), JamendoError> {
+        let connection = self.lock()?;
+        connection.execute(
+            "UPDATE selections SET cached_at = cached_at - ?1",
+            params![seconds.max(0)],
+        )?;
+        Ok(())
+    }
+
     fn prune(&self) -> Result<(), JamendoError> {
         let connection = self.lock()?;
         let now = unix_now();
         connection.execute(
             "DELETE FROM searches WHERE cached_at < ?1",
+            params![now - 7 * 86_400],
+        )?;
+        connection.execute(
+            "DELETE FROM selections WHERE cached_at < ?1",
             params![now - 7 * 86_400],
         )?;
         connection.execute(
@@ -300,6 +433,15 @@ mod tests {
         }
     }
 
+    fn selection(id: &str) -> JamendoSelection {
+        JamendoSelection {
+            id: id.into(),
+            name: format!("Selection {id}"),
+            user_name: "Curator".into(),
+            tracks: vec![track(id)],
+        }
+    }
+
     #[test]
     fn favorites_persist_and_search_cache_expires() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -343,5 +485,46 @@ mod tests {
             store.track("a").expect("track").expect("exists").name,
             "Track a"
         );
+    }
+
+    #[test]
+    fn genre_usage_ranks_the_prefetch_targets() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = JamendoStore::open(&dir.path().join("jamendo.sqlite3")).expect("open");
+        assert!(store.popular_genres(4).expect("empty usage").is_empty());
+        store.record_genre_use("jazz").expect("jazz");
+        store.record_genre_use("rock").expect("rock");
+        store.record_genre_use("jazz").expect("jazz again");
+        assert_eq!(
+            store.popular_genres(2).expect("popular"),
+            vec!["jazz".to_string(), "rock".to_string()]
+        );
+        store.record_genre_use("   ").expect("blank ignored");
+        assert_eq!(store.popular_genres(4).expect("popular").len(), 2);
+    }
+
+    #[test]
+    fn selections_are_cached_and_expire() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = JamendoStore::open(&dir.path().join("jamendo.sqlite3")).expect("open");
+        store
+            .store_selections(&[selection("one"), selection("two")])
+            .expect("store selections");
+        let cached = store
+            .cached_selections(60)
+            .expect("cache")
+            .expect("fresh selections");
+        assert_eq!(cached.len(), 2);
+        assert_eq!(
+            store
+                .selection("one")
+                .expect("selection")
+                .expect("exists")
+                .name,
+            "Selection one"
+        );
+        store.age_selection_cache(120).expect("age");
+        assert!(store.cached_selections(60).expect("cache").is_none());
+        assert!(store.cached_selections(300).expect("cache").is_some());
     }
 }

@@ -41,6 +41,11 @@ impl SourceQuery {
 pub struct SourceSearch {
     pub items: Vec<SourceItem>,
     pub offline: bool,
+    /// True when the items came from the local cache instead of a fresh
+    /// network response. The UI uses it only for status text.
+    pub cached: bool,
+    /// True when the source has at least one more page for the same query.
+    pub has_more: bool,
 }
 
 /// How the engine must treat a resolved source item.
@@ -71,6 +76,21 @@ pub trait SourceProvider: Send + Sync {
     /// Optional cover/artwork. Called from a background thread; may download.
     fn artwork(&self, _id: &str) -> Result<Option<PathBuf>, SourceError> {
         Ok(None)
+    }
+
+    /// Stops the discovery work in flight for this source. Providers that do
+    /// network I/O must stop retrying and discard the result; the registry has
+    /// already stopped listening to it.
+    fn cancel(&self) {}
+
+    /// One-shot cache warm-up. The application calls it at most once after
+    /// startup, and only for sources that are configured. It must not poll.
+    fn prefetch(&self) {}
+
+    /// Curated selections (editorial playlists, featured picks). Empty when the
+    /// source has no such concept.
+    fn selections(&self) -> Result<Vec<SourceItem>, SourceError> {
+        Ok(Vec::new())
     }
 
     /// Entries inside a source item (for example podcast episodes).

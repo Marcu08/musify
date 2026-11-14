@@ -64,6 +64,32 @@ impl JamendoTrack {
     }
 }
 
+/// A curated Jamendo playlist returned by the hot-selection endpoint. Jamendo
+/// returns the playlists and their tracks together; the tracks are cached so a
+/// click on a selection does not need another request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JamendoSelection {
+    pub id: String,
+    pub name: String,
+    pub user_name: String,
+    pub tracks: Vec<JamendoTrack>,
+}
+
+impl JamendoSelection {
+    #[must_use]
+    pub fn track_count(&self) -> usize {
+        self.tracks.len()
+    }
+
+    #[must_use]
+    pub fn image_url(&self) -> Option<&str> {
+        self.tracks
+            .iter()
+            .map(|track| track.image_url.trim())
+            .find(|url| !url.is_empty())
+    }
+}
+
 /// A short, human-readable label for a Creative Commons license URL.
 #[must_use]
 pub fn license_label(url: &str) -> &'static str {

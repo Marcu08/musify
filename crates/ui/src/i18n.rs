@@ -26,7 +26,7 @@ pub const SOURCES_HINT: &str = "Scegli da dove viene la musica.";
 pub const SOURCE_OPEN: &str = "Apri";
 pub const SOURCES_RADIO_CAPTION: &str = "Radio Browser · preferiti offline";
 pub const SOURCES_PODCAST_CAPTION: &str = "iTunes Search · RSS · episodi e ripresa";
-pub const SOURCES_JAMENDO_CAPTION: &str = "Creative Commons · streaming · Jamendo";
+pub const SOURCES_JAMENDO_CAPTION: &str = "Generi e selezioni · streaming · Creative Commons";
 pub const RADIO_TITLE: &str = "Radio internet";
 pub const RADIO_HINT: &str = "Cerca stazioni con Radio Browser. I preferiti restano sul computer e funzionano anche offline.";
 pub const RADIO_NAME: &str = "Nome";
@@ -67,20 +67,92 @@ pub const PODCAST_RESUME: &str = "Riprendi a";
 pub const NOT_SEEKABLE: &str = "Stream non seekable";
 
 pub const JAMENDO_TITLE: &str = "Jamendo";
-pub const JAMENDO_HINT: &str =
-    "Musica Creative Commons da Jamendo. Solo streaming: nessun download né copia dei file.";
-pub const JAMENDO_SEARCH_PLACEHOLDER: &str = "Brano o artista";
-pub const JAMENDO_TAG_PLACEHOLDER: &str = "Tag / genere";
+pub const JAMENDO_HINT: &str = "Scegli un genere o cerca per titolo, artista o album. Solo streaming Creative Commons, nessun download.";
+pub const JAMENDO_SEARCH_PLACEHOLDER: &str = "Titolo, artista o album";
 pub const JAMENDO_SEARCH: &str = "Cerca";
 pub const JAMENDO_FAVORITES: &str = "Preferiti";
 pub const JAMENDO_EMPTY: &str = "Nessun brano trovato";
-pub const JAMENDO_EMPTY_HINT: &str = "Prova un altro brano, artista o tag.";
-pub const JAMENDO_LOADING: &str = "Ricerca Jamendo…";
+pub const JAMENDO_EMPTY_HINT: &str =
+    "Prova un altro genere, un altro ordinamento o un testo diverso.";
+pub const JAMENDO_LOADING: &str = "Caricamento brani…";
+pub const JAMENDO_LOADING_MORE: &str = "Caricamento altri brani…";
+pub const JAMENDO_LOAD_MORE: &str = "Carica altri";
 pub const JAMENDO_OFFLINE: &str = "Offline: mostro i risultati salvati";
 pub const JAMENDO_PLAY: &str = "Ascolta";
 pub const JAMENDO_TRACK_PAGE: &str = "Jamendo";
 pub const JAMENDO_NOT_CONFIGURED: &str = "Jamendo non configurato";
 pub const JAMENDO_CONFIG_HINT: &str = "Imposta la variabile d'ambiente MUSIFY_JAMENDO_CLIENT_ID con il client id del tuo account sviluppatore Jamendo e riavvia Musify.";
+pub const JAMENDO_SORT_WEEK: &str = "Popolari settimana";
+pub const JAMENDO_SORT_MONTH: &str = "Popolari mese";
+pub const JAMENDO_SORT_ALL: &str = "Sempre popolari";
+pub const JAMENDO_SORT_NEWEST: &str = "Novità";
+pub const JAMENDO_SELECTIONS: &str = "Selezioni Jamendo";
+pub const JAMENDO_SELECTIONS_LOADING: &str = "Carico le selezioni…";
+pub const JAMENDO_REFRESH_SELECTIONS: &str = "Aggiorna selezioni";
+pub const JAMENDO_BACK_TO_GENRES: &str = "Torna ai generi";
+pub const JAMENDO_SAVE_PLAYLIST: &str = "Salva come playlist";
+pub const JAMENDO_SHUFFLE: &str = "Mescola";
+pub const JAMENDO_ENQUEUE_ALL: &str = "Aggiungi tutto alla coda";
+pub const JAMENDO_KEYBOARD_HINT: &str = "Alt+←/→ cambia genere · Enter riproduce il brano selezionato · Ctrl+Enter riproduce tutto · Alt+Enter mescola";
+
+/// API tag and Italian label for the home genre grid. The tag is what Jamendo
+/// accepts in `tags`; the label is the only user-facing copy.
+pub const JAMENDO_GENRES: &[(&str, &str)] = &[
+    ("jazz", "Jazz"),
+    ("rock", "Rock"),
+    ("electronic", "Elettronica"),
+    ("ambient", "Ambient"),
+    ("pop", "Pop"),
+    ("hiphop", "Hip hop"),
+    ("classical", "Classica"),
+    ("lounge", "Lounge"),
+    ("folk", "Folk"),
+    ("world", "World"),
+    ("metal", "Metal"),
+    ("soundtrack", "Colonne sonore"),
+];
+
+pub fn jamendo_genre_label(tag: &str) -> String {
+    JAMENDO_GENRES
+        .iter()
+        .find(|(candidate, _)| *candidate == tag)
+        .map_or_else(|| tag.to_string(), |(_, label)| (*label).to_string())
+}
+
+pub fn jamendo_latency(ms: u128, cached: bool) -> String {
+    if cached {
+        format!("Da cache · {ms} ms")
+    } else {
+        format!("Risultati in {ms} ms")
+    }
+}
+
+pub fn jamendo_playing(count: usize) -> String {
+    match count {
+        1 => "Riproduco 1 brano.".into(),
+        n => format!("Riproduco {n} brani."),
+    }
+}
+
+pub fn jamendo_enqueued(count: usize) -> String {
+    match count {
+        1 => "1 brano aggiunto alla coda.".into(),
+        n => format!("{n} brani aggiunti alla coda."),
+    }
+}
+
+pub fn jamendo_playlist_name(genre: &str, sort: &str) -> String {
+    let genre = jamendo_genre_label(genre);
+    format!("Jamendo · {genre} · {sort}")
+}
+
+pub fn jamendo_playlist_name_selection(selection: &str) -> String {
+    format!("Jamendo · {selection}")
+}
+
+pub fn jamendo_playlist_saved(name: &str) -> String {
+    format!("Playlist salvata: {name}")
+}
 
 pub const NAV_PLAYLISTS: &str = "Playlist";
 pub const PLAYLISTS_TITLE: &str = "Playlist";
@@ -175,7 +247,7 @@ pub const AUDIO_TITLE: &str = "Uscita audio";
 pub const AUDIO_UNAVAILABLE: &str = "Nessun dispositivo audio disponibile";
 pub const LIBRARY_TITLE: &str = "Libreria";
 pub const SHORTCUTS_TITLE: &str = "Scorciatoie";
-pub const SHORTCUTS: &str = "Spazio: play/pausa · ←/→: cerca ±5 s · Ctrl+←/→: brano precedente/successivo · Alt+↑/↓: riordina playlist · Ctrl+F: cerca · Ctrl+R: riscansiona · Esc: chiudi ricerca";
+pub const SHORTCUTS: &str = "Spazio: play/pausa · ←/→: cerca ±5 s · Ctrl+←/→: brano precedente/successivo · Alt+↑/↓: riordina playlist · Ctrl+F: cerca · Ctrl+R: riscansiona · Esc: chiudi ricerca · Jamendo: Alt+←/→ genere, Enter brano, Ctrl+Enter tutto, Alt+Enter mescola";
 pub const SCAN_RUNNING: &str = "Scansione in corso";
 pub const SCAN_IDLE: &str = "Libreria aggiornata";
 

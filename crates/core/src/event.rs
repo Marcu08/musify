@@ -49,11 +49,18 @@ pub enum Event {
         request_id: u64,
         items: Vec<crate::SourceItem>,
         offline: bool,
+        cached: bool,
+        has_more: bool,
     },
     SourceSearchFailed {
         source: String,
         request_id: u64,
         message: String,
+    },
+    SourceSelections {
+        source: String,
+        request_id: u64,
+        items: Vec<crate::SourceItem>,
     },
     SourceArtwork {
         source: String,

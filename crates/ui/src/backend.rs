@@ -42,6 +42,28 @@ pub trait Backend: Send + Sync {
     fn source_set_watched(&self, _source: &str, _id: &str, _watched: bool) -> Result<(), String> {
         Err("source entries are not available".into())
     }
+    fn source_cancel(&self, _source: &str) {}
+    fn source_prefetch(&self, _source: &str) {}
+    fn source_selections(&self, _source: &str) {}
+    fn source_play_list(
+        &self,
+        _source: &str,
+        _ids: &[String],
+        _shuffle: bool,
+    ) -> Result<usize, String> {
+        Err("source lists are not available".into())
+    }
+    fn source_enqueue_list(&self, _source: &str, _ids: &[String]) -> Result<usize, String> {
+        Err("source lists are not available".into())
+    }
+    fn source_save_list_as_playlist(
+        &self,
+        _source: &str,
+        _ids: &[String],
+        _name: &str,
+    ) -> Result<PlaylistId, String> {
+        Err("source lists are not available".into())
+    }
     fn source_available(&self, _source: &str) -> bool {
         false
     }

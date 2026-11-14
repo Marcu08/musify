@@ -10,6 +10,8 @@ pub enum JamendoError {
     Storage(String),
     #[error("Jamendo track not found: {0}")]
     NotFound(String),
+    #[error("Jamendo request cancelled")]
+    Cancelled,
 }
 
 impl From<rusqlite::Error> for JamendoError {

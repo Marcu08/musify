@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crossbeam_channel::Sender;
-use musify_core::{Event, ResolvedSource, SourceEntry, SourceItem, SourceProvider, SourceQuery};
+use musify_core::{
+    Event, ResolvedSource, SourceEntry, SourceItem, SourcePlayback, SourceProvider, SourceQuery,
+    Track,
+};
 
 use super::Waker;
 
@@ -80,6 +83,8 @@ impl SourceRegistry {
                                 request_id,
                                 items: outcome.items,
                                 offline: outcome.offline,
+                                cached: outcome.cached,
+                                has_more: outcome.has_more,
                             },
                             artwork_ids,
                         )
@@ -110,6 +115,51 @@ impl SourceRegistry {
             });
     }
 
+    pub(crate) fn cancel(&self, source: &str) {
+        if let Some(entry) = self.entries.get(source) {
+            // A newer request id makes the worker drop its event even if the
+            // provider was already inside a blocking HTTP read.
+            entry.request.fetch_add(1, Ordering::AcqRel);
+            entry.provider.cancel();
+        }
+    }
+
+    /// One-shot cache warm-up, run on a named background thread. The provider
+    /// itself is idempotent; calling this twice does not start a second pass.
+    pub(crate) fn prefetch(&self, source: &str) {
+        let Some(entry) = self.entries.get(source) else {
+            return;
+        };
+        let provider = Arc::clone(&entry.provider);
+        let _ = thread::Builder::new()
+            .name(format!("musify-{source}-prefetch"))
+            .spawn(move || provider.prefetch());
+    }
+
+    /// Curated selections are a background operation because a cold cache may
+    /// need two network requests. A failure or cancellation simply hides the
+    /// section; it is not an error banner.
+    pub(crate) fn selections(&self, source: &str) {
+        let Some(entry) = self.entries.get(source) else {
+            return;
+        };
+        let provider = Arc::clone(&entry.provider);
+        let source_name = provider.scheme().to_string();
+        let events = self.events.clone();
+        let waker = Arc::clone(&self.waker);
+        let _ = thread::Builder::new()
+            .name(format!("musify-{source}-selections"))
+            .spawn(move || {
+                let items = provider.selections().unwrap_or_default();
+                let _ = events.send(Event::SourceSelections {
+                    source: source_name,
+                    request_id: 0,
+                    items,
+                });
+                wake(&waker);
+            });
+    }
+
     pub(crate) fn favorites(&self, source: &str) -> Result<Vec<SourceItem>, String> {
         let entry = self.entry(source)?;
         let items = entry
@@ -119,6 +169,30 @@ impl SourceRegistry {
         let ids = search_artwork_ids(&items);
         self.prefetch_in_background(entry.provider.scheme(), Arc::clone(&entry.provider), ids);
         Ok(items)
+    }
+
+    /// Resolves a list of source items for play-all/enqueue/save. Items that
+    /// disappeared from the source cache are skipped, like missing local files
+    /// in a playlist; live streams are not finite queue items.
+    pub(crate) fn resolve_tracks(
+        &self,
+        source: &str,
+        ids: &[String],
+    ) -> Result<Vec<Track>, String> {
+        let entry = self.entry(source)?;
+        let mut tracks = Vec::new();
+        for id in ids {
+            match entry.provider.resolve(id) {
+                Ok(resolved) if !matches!(resolved.playback, SourcePlayback::Live) => {
+                    tracks.push(resolved.track);
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
+        if tracks.is_empty() {
+            return Err("no playable source items".into());
+        }
+        Ok(tracks)
     }
 
     pub(crate) fn toggle_favorite(&self, source: &str, id: &str) -> Result<bool, String> {
@@ -303,7 +377,13 @@ mod tests {
             Ok(SourceSearch {
                 items: vec![self.item(&query.text)],
                 offline: false,
+                cached: false,
+                has_more: true,
             })
+        }
+
+        fn selections(&self) -> Result<Vec<SourceItem>, SourceError> {
+            Ok(vec![self.item("selection")])
         }
 
         fn favorites(&self) -> Result<Vec<SourceItem>, SourceError> {
@@ -383,15 +463,43 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("search event");
         match event {
-            Event::SourceResults { source, items, .. } => {
+            Event::SourceResults {
+                source,
+                items,
+                has_more,
+                ..
+            } => {
                 assert_eq!(source, "fake");
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].title, "jazz");
+                assert!(has_more);
             }
             other => panic!("unexpected event: {other:?}"),
         }
         assert!(registry.favorites("missing").is_err());
         assert!(registry.resolve("missing", "id").is_err());
+    }
+
+    #[test]
+    fn registry_resolves_lists_and_emits_selections() {
+        let (registry, events, _waker) = registry();
+        let ids = vec!["first".to_string(), "second".to_string()];
+        let tracks = registry.resolve_tracks("fake", &ids).expect("tracks");
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].source.scheme(), "fake");
+        registry.selections("fake");
+        let event = events
+            .recv_timeout(Duration::from_secs(2))
+            .expect("selections event");
+        match event {
+            Event::SourceSelections { source, items, .. } => {
+                assert_eq!(source, "fake");
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].title, "selection");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(registry.resolve_tracks("missing", &ids).is_err());
     }
 
     #[test]

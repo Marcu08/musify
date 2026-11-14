@@ -104,6 +104,24 @@ pub fn pill(label: impl Into<String>, active: bool) -> El {
         }))
 }
 
+/// A genre button in the Jamendo grid. It grows to fill its column so the rows
+/// line up without hardcoded widths.
+pub fn choice_chip(label: &'static str, active: bool) -> El {
+    let p = palette();
+    row()
+        .h(26.0)
+        .px(9.0)
+        .radius(theme::RADIUS)
+        .center()
+        .fill(if active { p.accent_soft } else { p.card })
+        .hover(if active { p.accent_hover } else { p.hover })
+        .child(text(label).font(theme::BUTTON).color(if active {
+            p.accent
+        } else {
+            p.text_secondary
+        }))
+}
+
 pub fn action_button(label: impl Into<String>, accent: bool) -> El {
     let p = palette();
     row()

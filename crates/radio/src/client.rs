@@ -352,6 +352,8 @@ impl SourceProvider for RadioBrowser {
         Ok(SourceSearch {
             items: outcome.items,
             offline: outcome.offline,
+            cached: false,
+            has_more: false,
         })
     }
 

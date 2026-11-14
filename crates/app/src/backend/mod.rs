@@ -625,6 +625,61 @@ impl Backend for AppBackend {
         self.sources.set_watched(source, id, watched)
     }
 
+    fn source_cancel(&self, source: &str) {
+        self.sources.cancel(source);
+    }
+
+    fn source_prefetch(&self, source: &str) {
+        self.sources.prefetch(source);
+    }
+
+    fn source_selections(&self, source: &str) {
+        self.sources.selections(source);
+    }
+
+    fn source_play_list(
+        &self,
+        source: &str,
+        ids: &[String],
+        shuffle: bool,
+    ) -> Result<usize, String> {
+        let mut tracks = self.sources.resolve_tracks(source, ids)?;
+        if shuffle {
+            shuffle_tracks(&mut tracks);
+        }
+        let count = tracks.len();
+        self.send_audio(Command::PlayTracks {
+            tracks,
+            start_index: 0,
+        });
+        Ok(count)
+    }
+
+    fn source_enqueue_list(&self, source: &str, ids: &[String]) -> Result<usize, String> {
+        let tracks = self.sources.resolve_tracks(source, ids)?;
+        let count = tracks.len();
+        self.send_audio(Command::Enqueue(tracks));
+        Ok(count)
+    }
+
+    fn source_save_list_as_playlist(
+        &self,
+        source: &str,
+        ids: &[String],
+        name: &str,
+    ) -> Result<PlaylistId, String> {
+        let tracks = self.sources.resolve_tracks(source, ids)?;
+        let playlist = self
+            .library
+            .create_playlist(name)
+            .map_err(|error| error.to_string())?;
+        if let Err(error) = self.library.add_tracks_to_playlist(playlist, &tracks) {
+            let _ = self.library.delete_playlist(playlist);
+            return Err(error.to_string());
+        }
+        Ok(playlist)
+    }
+
     fn source_available(&self, source: &str) -> bool {
         self.sources.contains(source)
     }
@@ -898,6 +953,24 @@ fn wake(waker: &Arc<Mutex<Option<Waker>>>) {
     let task = waker.lock().ok().and_then(|guard| guard.as_ref().cloned());
     if let Some(task) = task {
         task();
+    }
+}
+
+/// Fisher-Yates with a small time-seeded xorshift. "Shuffle" on a source list
+/// only changes the order of that list; it does not toggle the global shuffle
+/// setting.
+fn shuffle_tracks(tracks: &mut [Track]) {
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0x9e37_79b9_7f4a_7c15, |duration| {
+            u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+        });
+    for index in (1..tracks.len()).rev() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let target = (state as usize) % (index + 1);
+        tracks.swap(index, target);
     }
 }
 

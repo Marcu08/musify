@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use musify_core::{
     Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, PlaybackState, Playlist,
@@ -27,6 +27,45 @@ pub enum View {
     Jamendo,
     Settings,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JamendoSort {
+    PopularWeek,
+    PopularMonth,
+    PopularTotal,
+    Newest,
+}
+
+impl JamendoSort {
+    #[must_use]
+    pub fn filter_value(self) -> &'static str {
+        match self {
+            Self::PopularWeek => "popular_week",
+            Self::PopularMonth => "popular_month",
+            Self::PopularTotal => "popular_total",
+            Self::Newest => "newest",
+        }
+    }
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PopularWeek => i18n::JAMENDO_SORT_WEEK,
+            Self::PopularMonth => i18n::JAMENDO_SORT_MONTH,
+            Self::PopularTotal => i18n::JAMENDO_SORT_ALL,
+            Self::Newest => i18n::JAMENDO_SORT_NEWEST,
+        }
+    }
+
+    pub const ALL: [Self; 4] = [
+        Self::PopularWeek,
+        Self::PopularMonth,
+        Self::PopularTotal,
+        Self::Newest,
+    ];
+}
+
+pub const JAMENDO_PAGE_SIZE: usize = 60;
 
 #[derive(Debug, Default)]
 pub struct RadioSearchState {
@@ -165,11 +204,29 @@ pub struct UiState {
     pub podcast_entries_loading: bool,
     pub jamendo_available: bool,
     pub jamendo_query: TextEdit,
-    pub jamendo_tag: TextEdit,
     pub jamendo_items: Vec<SourceItem>,
     pub jamendo_keys: Vec<String>,
     pub jamendo_loading: bool,
     pub jamendo_offline: bool,
+    pub jamendo_genre: String,
+    pub jamendo_sort: JamendoSort,
+    pub jamendo_offset: usize,
+    pub jamendo_has_more: bool,
+    pub jamendo_loading_more: bool,
+    pub jamendo_cached: bool,
+    pub jamendo_selected: Option<usize>,
+    pub jamendo_started: bool,
+    pub jamendo_request_at: Option<Instant>,
+    pub jamendo_latency_ms: Option<u128>,
+    pub jamendo_latency_cached: bool,
+    pub jamendo_selections: Vec<SourceItem>,
+    pub jamendo_selection_keys: Vec<String>,
+    pub jamendo_selections_loading: bool,
+    pub jamendo_selections_requested: bool,
+    pub jamendo_selections_attempts: u8,
+    pub jamendo_selection: Option<String>,
+    pub jamendo_selection_name: String,
+    pub jamendo_action_status: Option<String>,
     pub stream_title: Option<String>,
     pub stream_status: StreamStatus,
     pub seekable: bool,
@@ -235,11 +292,32 @@ impl UiState {
             podcast_entries_loading: false,
             jamendo_available,
             jamendo_query: TextEdit::default(),
-            jamendo_tag: TextEdit::default(),
             jamendo_items: Vec::new(),
             jamendo_keys: Vec::new(),
             jamendo_loading: false,
             jamendo_offline: false,
+            jamendo_genre: i18n::JAMENDO_GENRES
+                .first()
+                .map_or("jazz", |(tag, _)| *tag)
+                .to_string(),
+            jamendo_sort: JamendoSort::PopularWeek,
+            jamendo_offset: 0,
+            jamendo_has_more: false,
+            jamendo_loading_more: false,
+            jamendo_cached: false,
+            jamendo_selected: None,
+            jamendo_started: false,
+            jamendo_request_at: None,
+            jamendo_latency_ms: None,
+            jamendo_latency_cached: false,
+            jamendo_selections: Vec::new(),
+            jamendo_selection_keys: Vec::new(),
+            jamendo_selections_loading: false,
+            jamendo_selections_requested: false,
+            jamendo_selections_attempts: 0,
+            jamendo_selection: None,
+            jamendo_selection_name: String::new(),
+            jamendo_action_status: None,
             stream_title: None,
             stream_status: StreamStatus::Idle,
             seekable: true,
@@ -356,7 +434,14 @@ impl UiState {
     }
 
     pub fn set_view(&mut self, view: View) {
+        let previous = self.view;
         self.view = view;
+        if previous == View::Jamendo && view != View::Jamendo {
+            self.backend.source_cancel("jamendo");
+            self.jamendo_loading = false;
+            self.jamendo_loading_more = false;
+            self.jamendo_request_at = None;
+        }
         if matches!(view, View::Tracks | View::Albums | View::Artists) {
             self.filter = None;
             self.filtered.clear();
@@ -368,8 +453,9 @@ impl UiState {
         if view == View::Podcast {
             self.refresh_podcast_subscriptions();
         }
-        if view == View::Jamendo {
-            self.refresh_jamendo_favorites();
+        if view == View::Jamendo && !self.jamendo_started {
+            self.jamendo_started = true;
+            self.load_jamendo_page(true, false);
         }
         if view == View::Playlists {
             self.refresh_playlists();
@@ -801,33 +887,145 @@ impl UiState {
     }
 
     pub fn refresh_jamendo_favorites(&mut self) {
+        self.backend.source_cancel("jamendo");
         match self.backend.source_favorites("jamendo") {
             Ok(items) => {
                 self.jamendo_loading = false;
+                self.jamendo_loading_more = false;
                 self.jamendo_offline = false;
+                self.jamendo_has_more = false;
+                self.jamendo_selected = None;
+                self.jamendo_selection = None;
+                self.jamendo_selection_name.clear();
                 self.set_jamendo_items(items);
             }
             Err(error) => self.error = Some(error),
         }
     }
 
-    pub fn search_jamendo(&mut self) {
-        let text = self.jamendo_query.text.trim().to_string();
-        let tag = self.jamendo_tag.text.trim().to_string();
-        if text.is_empty() && tag.is_empty() {
-            self.refresh_jamendo_favorites();
+    fn load_jamendo_page(&mut self, reset: bool, refresh: bool) {
+        if !self.jamendo_available {
             return;
         }
-        self.jamendo_loading = true;
-        self.jamendo_offline = false;
+        if reset {
+            self.jamendo_offset = 0;
+            self.jamendo_has_more = false;
+            self.jamendo_selected = None;
+            self.jamendo_items.clear();
+            self.jamendo_keys.clear();
+            self.jamendo_loading = true;
+            self.jamendo_loading_more = false;
+            self.list_version = self.list_version.wrapping_add(1);
+        } else {
+            self.jamendo_offset = self.jamendo_offset.saturating_add(JAMENDO_PAGE_SIZE);
+            self.jamendo_loading_more = true;
+            self.jamendo_loading = false;
+        }
         let mut query = SourceQuery {
-            text,
+            text: self.jamendo_query.text.trim().to_string(),
             ..SourceQuery::default()
         };
-        if !tag.is_empty() {
-            query.set_filter("tag", tag);
+        if let Some(selection) = &self.jamendo_selection {
+            query.set_filter("selection", selection.clone());
+        } else {
+            if !self.jamendo_genre.is_empty() {
+                query.set_filter("tag", self.jamendo_genre.clone());
+                query.set_filter("order", self.jamendo_sort.filter_value());
+            }
         }
+        query.set_filter("offset", self.jamendo_offset.to_string());
+        query.set_filter("limit", JAMENDO_PAGE_SIZE.to_string());
+        if refresh {
+            query.set_filter("refresh", "1");
+        }
+        self.jamendo_offline = false;
+        self.jamendo_cached = false;
+        self.jamendo_request_at = Some(Instant::now());
         self.backend.source_search("jamendo", query);
+    }
+
+    pub fn search_jamendo(&mut self) {
+        if self.jamendo_selection.is_some() && !self.jamendo_query.text.trim().is_empty() {
+            self.jamendo_selection = None;
+            self.jamendo_selection_name.clear();
+        }
+        self.load_jamendo_page(true, true);
+    }
+
+    pub fn select_jamendo_genre(&mut self, tag: &str) {
+        self.jamendo_genre = tag.to_string();
+        self.jamendo_selection = None;
+        self.jamendo_selection_name.clear();
+        self.load_jamendo_page(true, false);
+    }
+
+    pub fn set_jamendo_sort(&mut self, sort: JamendoSort) {
+        self.jamendo_sort = sort;
+        self.jamendo_selection = None;
+        self.jamendo_selection_name.clear();
+        self.load_jamendo_page(true, false);
+    }
+
+    pub fn load_more_jamendo(&mut self) {
+        if self.jamendo_loading || self.jamendo_loading_more || !self.jamendo_has_more {
+            return;
+        }
+        self.load_jamendo_page(false, false);
+    }
+
+    pub fn move_jamendo_genre(&mut self, delta: i32) {
+        let genres = i18n::JAMENDO_GENRES;
+        if genres.is_empty() {
+            return;
+        }
+        let current = genres
+            .iter()
+            .position(|(tag, _)| *tag == self.jamendo_genre)
+            .unwrap_or(0);
+        let next = (current as i32 + delta).rem_euclid(genres.len() as i32) as usize;
+        let tag = genres[next].0;
+        self.select_jamendo_genre(tag);
+    }
+
+    pub fn request_jamendo_selections(&mut self) {
+        if !self.jamendo_available
+            || self.jamendo_selections_requested
+            || self.jamendo_selections_attempts >= 3
+        {
+            return;
+        }
+        self.jamendo_selections_requested = true;
+        self.jamendo_selections_attempts = self.jamendo_selections_attempts.saturating_add(1);
+        self.jamendo_selections_loading = true;
+        self.backend.source_selections("jamendo");
+    }
+
+    pub fn refresh_jamendo_selections(&mut self) {
+        self.jamendo_selections_requested = false;
+        self.jamendo_selections_attempts = 0;
+        self.request_jamendo_selections();
+    }
+
+    pub fn open_jamendo_selection(&mut self, id: &str) {
+        let name = self
+            .jamendo_selections
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.title.clone())
+            .unwrap_or_default();
+        self.jamendo_selection = Some(id.to_string());
+        self.jamendo_selection_name = name;
+        self.jamendo_query.clear();
+        self.load_jamendo_page(true, false);
+    }
+
+    pub fn back_to_jamendo_genres(&mut self) {
+        if self.jamendo_selection.is_none() {
+            return;
+        }
+        self.jamendo_selection = None;
+        self.jamendo_selection_name.clear();
+        self.load_jamendo_page(true, false);
     }
 
     fn set_jamendo_items(&mut self, items: Vec<SourceItem>) {
@@ -836,6 +1034,21 @@ impl UiState {
             .map(|item| format!("jamendo-{}", item.id))
             .collect();
         self.jamendo_items = items;
+        self.list_version = self.list_version.wrapping_add(1);
+    }
+
+    fn append_jamendo_items(&mut self, items: Vec<SourceItem>) {
+        for item in items {
+            if self
+                .jamendo_items
+                .iter()
+                .any(|existing| existing.id == item.id)
+            {
+                continue;
+            }
+            self.jamendo_keys.push(format!("jamendo-{}", item.id));
+            self.jamendo_items.push(item);
+        }
         self.list_version = self.list_version.wrapping_add(1);
     }
 
@@ -851,8 +1064,89 @@ impl UiState {
         }
     }
 
+    pub fn select_jamendo_row(&mut self, index: usize) {
+        if self.jamendo_selected == Some(index) {
+            return;
+        }
+        self.jamendo_selected = Some(index);
+        self.list_version = self.list_version.wrapping_add(1);
+    }
+
     pub fn play_jamendo(&mut self, id: &str) {
         self.backend.source_play("jamendo", id);
+    }
+
+    pub fn play_jamendo_selected(&mut self) {
+        let id = self
+            .jamendo_selected
+            .and_then(|index| self.jamendo_items.get(index))
+            .or_else(|| self.jamendo_items.first())
+            .map(|item| item.id.clone());
+        if let Some(id) = id {
+            self.play_jamendo(&id);
+        }
+    }
+
+    fn jamendo_ids(&self) -> Vec<String> {
+        self.jamendo_items
+            .iter()
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
+    pub fn play_jamendo_list(&mut self, shuffle: bool) {
+        let ids = self.jamendo_ids();
+        if ids.is_empty() {
+            self.jamendo_action_status = Some(i18n::JAMENDO_EMPTY.into());
+            return;
+        }
+        match self.backend.source_play_list("jamendo", &ids, shuffle) {
+            Ok(count) => {
+                self.jamendo_action_status = Some(i18n::jamendo_playing(count));
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn enqueue_jamendo_list(&mut self) {
+        let ids = self.jamendo_ids();
+        if ids.is_empty() {
+            self.jamendo_action_status = Some(i18n::JAMENDO_EMPTY.into());
+            return;
+        }
+        match self.backend.source_enqueue_list("jamendo", &ids) {
+            Ok(count) => {
+                self.jamendo_action_status = Some(i18n::jamendo_enqueued(count));
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    pub fn save_jamendo_playlist(&mut self) {
+        let ids = self.jamendo_ids();
+        if ids.is_empty() {
+            self.jamendo_action_status = Some(i18n::JAMENDO_EMPTY.into());
+            return;
+        }
+        let name = if let Some(selection) = &self.jamendo_selection {
+            if self.jamendo_selection_name.trim().is_empty() {
+                i18n::jamendo_playlist_name_selection(selection)
+            } else {
+                i18n::jamendo_playlist_name_selection(&self.jamendo_selection_name)
+            }
+        } else {
+            i18n::jamendo_playlist_name(&self.jamendo_genre, self.jamendo_sort.label())
+        };
+        match self
+            .backend
+            .source_save_list_as_playlist("jamendo", &ids, &name)
+        {
+            Ok(_) => {
+                self.refresh_playlists();
+                self.jamendo_action_status = Some(i18n::jamendo_playlist_saved(&name));
+            }
+            Err(error) => self.error = Some(error),
+        }
     }
 
     pub fn add_jamendo_to_selected_playlist(&mut self, id: &str) {
@@ -1190,11 +1484,28 @@ impl UiState {
                 request_id: _,
                 items,
                 offline,
+                cached,
+                has_more,
             } => {
                 if source == "jamendo" {
+                    let loading_more = self.jamendo_loading_more;
                     self.jamendo_loading = false;
+                    self.jamendo_loading_more = false;
                     self.jamendo_offline = offline;
-                    self.set_jamendo_items(items);
+                    self.jamendo_cached = cached;
+                    self.jamendo_latency_cached = cached;
+                    if let Some(started) = self.jamendo_request_at.take() {
+                        self.jamendo_latency_ms = Some(started.elapsed().as_millis());
+                    }
+                    if loading_more {
+                        self.append_jamendo_items(items);
+                    } else {
+                        self.set_jamendo_items(items);
+                    }
+                    self.jamendo_has_more = has_more;
+                    if self.jamendo_selections.is_empty() && !self.jamendo_selections_requested {
+                        self.request_jamendo_selections();
+                    }
                     return true;
                 }
                 if source == "podcast" {
@@ -1219,6 +1530,8 @@ impl UiState {
             } => {
                 if source == "jamendo" {
                     self.jamendo_loading = false;
+                    self.jamendo_loading_more = false;
+                    self.jamendo_request_at = None;
                     self.error = Some(message);
                     return true;
                 }
@@ -1232,6 +1545,28 @@ impl UiState {
                 }
                 self.source_loading = false;
                 self.error = Some(message);
+                true
+            }
+            Event::SourceSelections {
+                source,
+                request_id: _,
+                items,
+            } => {
+                if source != "jamendo" {
+                    return false;
+                }
+                self.jamendo_selections_loading = false;
+                if items.is_empty() && self.jamendo_selections_attempts < 3 {
+                    // A cancelled or empty cold fetch can retry after the next
+                    // result; the attempt counter prevents a request loop.
+                    self.jamendo_selections_requested = false;
+                }
+                self.jamendo_selection_keys = items
+                    .iter()
+                    .map(|item| format!("jamendo-selection-{}", item.id))
+                    .collect();
+                self.jamendo_selections = items;
+                self.list_version = self.list_version.wrapping_add(1);
                 true
             }
             Event::SeekableChanged(seekable) => {
@@ -1320,6 +1655,11 @@ impl UiState {
 pub fn setup(state: &mut UiState, waker: Waker) {
     state.install_images(waker.clone());
     state.backend.set_waker(waker);
+    if state.jamendo_available {
+        // One-shot, after the UI is ready. The provider itself refuses a
+        // second pass and a user search cancels the remaining warm-up.
+        state.backend.source_prefetch("jamendo");
+    }
 }
 
 pub fn poll(state: &mut UiState, _time: f64, _tx: &mut Tx) -> bool {
@@ -1340,6 +1680,28 @@ pub fn on_key(state: &mut UiState, event: &KeyEvent, tx: &mut Tx) -> bool {
         state.backend.shutdown();
         tx.close_window();
         return true;
+    }
+    if state.view == View::Jamendo {
+        if event.mods.alt && matches!(event.key, Key::Left) {
+            state.move_jamendo_genre(-1);
+            return true;
+        }
+        if event.mods.alt && matches!(event.key, Key::Right) {
+            state.move_jamendo_genre(1);
+            return true;
+        }
+        if matches!(event.key, Key::Enter) && event.mods.cmd {
+            state.play_jamendo_list(false);
+            return true;
+        }
+        if matches!(event.key, Key::Enter) && event.mods.alt {
+            state.play_jamendo_list(true);
+            return true;
+        }
+        if matches!(event.key, Key::Enter) && !event.mods.ctrl && !event.mods.alt {
+            state.play_jamendo_selected();
+            return true;
+        }
     }
     match &event.key {
         Key::Text(text) if text == " " => {
@@ -1567,19 +1929,37 @@ fn demo_playlist_item(
 fn scene_jamendo(state: &mut UiState) {
     state.view = View::Jamendo;
     state.jamendo_available = true;
-    state.jamendo_items = vec![musify_core::SourceItem {
-        id: "42".into(),
-        source: musify_core::SourceId::jamendo("https://audio.example/42.mp3"),
-        title: "Creative Track".into(),
-        subtitle: "Demo Artist · Demo Album".into(),
-        detail: "CC BY-SA".into(),
-        uri: "https://audio.example/42.mp3".into(),
-        favorite: false,
-        image_path: None,
-        duration: Some(Duration::from_secs(215)),
-        license_url: Some("https://creativecommons.org/licenses/by-sa/3.0/".into()),
-    }];
-    state.jamendo_keys = vec!["jamendo-42".into()];
+    state.jamendo_started = true;
+    state.jamendo_genre = "jazz".into();
+    state.jamendo_sort = JamendoSort::PopularWeek;
+    state.jamendo_cached = true;
+    state.jamendo_latency_ms = Some(38);
+    state.jamendo_latency_cached = true;
+    state.jamendo_has_more = true;
+    state.jamendo_selections_requested = true;
+    state.jamendo_selections = vec![
+        demo_jamendo_selection("sel-1", "Indie Night", "Jamendo Curator"),
+        demo_jamendo_selection("sel-2", "Electro Focus", "Jamendo Curator"),
+        demo_jamendo_selection("sel-3", "Acoustic Morning", "Jamendo Curator"),
+    ];
+    state.jamendo_selection_keys = state
+        .jamendo_selections
+        .iter()
+        .map(|item| format!("jamendo-selection-{}", item.id))
+        .collect();
+    state.jamendo_items = vec![
+        demo_jamendo_item("42", "Creative Track", "Demo Artist", "Demo Album", 215),
+        demo_jamendo_item("43", "Late Night Groove", "Nova", "After Hours", 188),
+        demo_jamendo_item("44", "Marea", "Kanso", "Onde", 242),
+        demo_jamendo_item("45", "Vetro e sale", "Marta & i Vetri", "Sale", 201),
+        demo_jamendo_item("46", "Luce blu", "Lucia Ferri", "Notturno", 176),
+        demo_jamendo_item("47", "Distanze", "Sole Alto", "Orizzonte", 229),
+    ];
+    state.jamendo_keys = state
+        .jamendo_items
+        .iter()
+        .map(|item| format!("jamendo-{}", item.id))
+        .collect();
     state.current = Some(QueueItem {
         id: QueueItemId::new(1),
         track: musify_jamendo_track(),
@@ -1587,6 +1967,42 @@ fn scene_jamendo(state: &mut UiState) {
     state.playback = PlaybackState::Playing;
     state.duration = Some(Duration::from_secs(215));
     state.position = Duration::from_secs(42);
+}
+
+fn demo_jamendo_item(
+    id: &str,
+    title: &str,
+    artist: &str,
+    album: &str,
+    seconds: u64,
+) -> musify_core::SourceItem {
+    musify_core::SourceItem {
+        id: id.into(),
+        source: musify_core::SourceId::jamendo(format!("https://audio.example/{id}.mp3")),
+        title: title.into(),
+        subtitle: format!("{artist} · {album}"),
+        detail: "CC BY-SA".into(),
+        uri: format!("https://audio.example/{id}.mp3"),
+        favorite: false,
+        image_path: None,
+        duration: Some(Duration::from_secs(seconds)),
+        license_url: Some("https://creativecommons.org/licenses/by-sa/3.0/".into()),
+    }
+}
+
+fn demo_jamendo_selection(id: &str, title: &str, curator: &str) -> musify_core::SourceItem {
+    musify_core::SourceItem {
+        id: id.into(),
+        source: musify_core::SourceId::jamendo(""),
+        title: title.into(),
+        subtitle: curator.into(),
+        detail: String::new(),
+        uri: String::new(),
+        favorite: false,
+        image_path: None,
+        duration: None,
+        license_url: None,
+    }
 }
 
 fn musify_jamendo_track() -> Track {
@@ -1675,4 +2091,371 @@ fn scene_albums(state: &mut UiState) {
 
 fn scene_artists(state: &mut UiState) {
     state.view = View::Artists;
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use musify_core::{
+        Album, AlbumId, Artist, ArtistId, Command, Event, LibraryStats, RepeatMode, SearchResults,
+        SourceItem, Track, TrackSort,
+    };
+
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        queries: Mutex<Vec<(String, SourceQuery)>>,
+        actions: Mutex<Vec<String>>,
+        selection_requests: AtomicUsize,
+        cancel_requests: AtomicUsize,
+        playlist_name: Mutex<Option<String>>,
+    }
+
+    impl RecordingBackend {
+        fn last_query(&self) -> (String, SourceQuery) {
+            self.queries
+                .lock()
+                .expect("queries")
+                .last()
+                .cloned()
+                .expect("a source query")
+        }
+
+        fn actions(&self) -> Vec<String> {
+            self.actions.lock().expect("actions").clone()
+        }
+    }
+
+    impl Backend for RecordingBackend {
+        fn send(&self, _command: Command) {}
+
+        fn try_recv_event(&self) -> Option<Event> {
+            None
+        }
+
+        fn set_waker(&self, _waker: Arc<dyn Fn() + Send + Sync>) {}
+
+        fn tracks(
+            &self,
+            _sort: TrackSort,
+            _limit: usize,
+            _offset: usize,
+        ) -> Result<Vec<Track>, String> {
+            Ok(Vec::new())
+        }
+
+        fn tracks_for_album(&self, _album_id: AlbumId) -> Result<Vec<Track>, String> {
+            Ok(Vec::new())
+        }
+
+        fn tracks_for_artist(&self, _artist_id: ArtistId) -> Result<Vec<Track>, String> {
+            Ok(Vec::new())
+        }
+
+        fn albums(&self) -> Result<Vec<Album>, String> {
+            Ok(Vec::new())
+        }
+
+        fn artists(&self) -> Result<Vec<Artist>, String> {
+            Ok(Vec::new())
+        }
+
+        fn search(&self, _query: &str, _limit: usize) -> Result<SearchResults, String> {
+            Ok(SearchResults::default())
+        }
+
+        fn stats(&self) -> Result<LibraryStats, String> {
+            Ok(LibraryStats::default())
+        }
+
+        fn folders(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+
+        fn add_folder(&self, _path: PathBuf) {}
+
+        fn remove_folder(&self, _path: &Path) {}
+
+        fn rescan(&self) {}
+
+        fn source_search(&self, source: &str, query: SourceQuery) {
+            self.queries
+                .lock()
+                .expect("queries")
+                .push((source.to_string(), query));
+        }
+
+        fn source_selections(&self, source: &str) {
+            if source == "jamendo" {
+                self.selection_requests.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        fn source_cancel(&self, source: &str) {
+            if source == "jamendo" {
+                self.cancel_requests.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+
+        fn source_play_list(
+            &self,
+            source: &str,
+            ids: &[String],
+            shuffle: bool,
+        ) -> Result<usize, String> {
+            self.actions
+                .lock()
+                .expect("actions")
+                .push(format!("play:{source}:{}:{shuffle}", ids.len()));
+            Ok(ids.len())
+        }
+
+        fn source_enqueue_list(&self, source: &str, ids: &[String]) -> Result<usize, String> {
+            self.actions
+                .lock()
+                .expect("actions")
+                .push(format!("enqueue:{source}:{}", ids.len()));
+            Ok(ids.len())
+        }
+
+        fn source_save_list_as_playlist(
+            &self,
+            source: &str,
+            ids: &[String],
+            name: &str,
+        ) -> Result<PlaylistId, String> {
+            self.actions
+                .lock()
+                .expect("actions")
+                .push(format!("save:{source}:{}", ids.len()));
+            *self.playlist_name.lock().expect("playlist name") = Some(name.to_string());
+            Ok(PlaylistId::new(7))
+        }
+
+        fn source_available(&self, source: &str) -> bool {
+            source == "jamendo"
+        }
+
+        fn playback_settings(&self) -> (u16, bool, RepeatMode) {
+            (80, false, RepeatMode::Off)
+        }
+
+        fn output_info(&self) -> (u32, u16) {
+            (48_000, 2)
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    fn backend() -> Arc<RecordingBackend> {
+        Arc::new(RecordingBackend::default())
+    }
+
+    fn item(id: &str) -> SourceItem {
+        SourceItem {
+            id: id.into(),
+            source: musify_core::SourceId::jamendo(format!("https://audio.example/{id}.mp3")),
+            title: format!("Track {id}"),
+            subtitle: "Artist · Album".into(),
+            detail: "CC BY-SA".into(),
+            uri: format!("https://audio.example/{id}.mp3"),
+            favorite: false,
+            image_path: None,
+            duration: Some(Duration::from_secs(180)),
+            license_url: Some("https://creativecommons.org/licenses/by-sa/3.0/".into()),
+        }
+    }
+
+    #[test]
+    fn opening_jamendo_loads_the_first_genre_with_the_default_sort() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.set_view(View::Jamendo);
+        let (source, query) = backend.last_query();
+        assert_eq!(source, "jamendo");
+        assert_eq!(query.filter("tag"), Some("jazz"));
+        assert_eq!(query.filter("order"), Some("popular_week"));
+        assert_eq!(query.filter("offset"), Some("0"));
+        assert_eq!(query.filter("limit"), Some("60"));
+        assert!(state.jamendo_loading);
+    }
+
+    #[test]
+    fn search_button_requests_a_fresh_response() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.set_view(View::Jamendo);
+        state.search_jamendo();
+        let (_, query) = backend.last_query();
+        assert_eq!(query.filter("refresh"), Some("1"));
+        assert_eq!(query.filter("tag"), Some("jazz"));
+    }
+
+    #[test]
+    fn genre_sort_and_pagination_produce_the_expected_queries() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.set_view(View::Jamendo);
+        state.select_jamendo_genre("rock");
+        let (_, query) = backend.last_query();
+        assert_eq!(query.filter("tag"), Some("rock"));
+        assert_eq!(query.filter("order"), Some("popular_week"));
+
+        state.set_jamendo_sort(JamendoSort::Newest);
+        let (_, query) = backend.last_query();
+        assert_eq!(query.filter("tag"), Some("rock"));
+        assert_eq!(query.filter("order"), Some("newest"));
+
+        state.apply_event(Event::SourceResults {
+            source: "jamendo".into(),
+            request_id: 1,
+            items: vec![item("1"), item("2")],
+            offline: false,
+            cached: true,
+            has_more: true,
+        });
+        assert!(state.jamendo_has_more);
+        assert!(state.jamendo_cached);
+        assert!(state.jamendo_latency_ms.is_some());
+        state.load_more_jamendo();
+        let (_, query) = backend.last_query();
+        assert_eq!(query.filter("offset"), Some("60"));
+        assert!(state.jamendo_loading_more);
+    }
+
+    #[test]
+    fn opening_a_selection_uses_its_id_and_returns_to_genres() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.set_view(View::Jamendo);
+        state.open_jamendo_selection("sel-1");
+        let (_, query) = backend.last_query();
+        assert_eq!(query.filter("selection"), Some("sel-1"));
+        assert_eq!(query.filter("tag"), None);
+        state.back_to_jamendo_genres();
+        let (_, query) = backend.last_query();
+        assert_eq!(query.filter("selection"), None);
+        assert_eq!(query.filter("tag"), Some("jazz"));
+    }
+
+    #[test]
+    fn list_actions_send_all_visible_ids_and_auto_name_the_playlist() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.jamendo_items = vec![item("1"), item("2"), item("3")];
+        state.jamendo_keys = vec!["jamendo-1".into(), "jamendo-2".into(), "jamendo-3".into()];
+        state.play_jamendo_list(true);
+        state.enqueue_jamendo_list();
+        state.save_jamendo_playlist();
+        assert_eq!(
+            backend.actions(),
+            vec![
+                "play:jamendo:3:true".to_string(),
+                "enqueue:jamendo:3".to_string(),
+                "save:jamendo:3".to_string(),
+            ]
+        );
+        let name = backend
+            .playlist_name
+            .lock()
+            .expect("playlist name")
+            .clone()
+            .expect("saved name");
+        assert!(name.contains("Jamendo"));
+        assert!(name.contains("Jazz"));
+    }
+
+    #[test]
+    fn source_results_request_selections_only_once() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        let event = Event::SourceResults {
+            source: "jamendo".into(),
+            request_id: 1,
+            items: vec![item("1")],
+            offline: false,
+            cached: false,
+            has_more: false,
+        };
+        state.apply_event(event.clone());
+        state.apply_event(event);
+        assert_eq!(backend.selection_requests.load(Ordering::Acquire), 1);
+        assert_eq!(state.jamendo_items.len(), 1);
+    }
+
+    #[test]
+    fn applying_sixty_results_stays_below_a_frame() {
+        let backend = backend();
+        let mut state = UiState::new(backend);
+        state.jamendo_selections_requested = true;
+        let items: Vec<SourceItem> = (0..60).map(|index| item(&index.to_string())).collect();
+        let started = Instant::now();
+        state.apply_event(Event::SourceResults {
+            source: "jamendo".into(),
+            request_id: 1,
+            items,
+            offline: false,
+            cached: true,
+            has_more: true,
+        });
+        let elapsed = started.elapsed();
+        println!("ui apply 60 items: {elapsed:?}");
+        assert_eq!(state.jamendo_items.len(), 60);
+        assert!(elapsed < Duration::from_millis(16));
+    }
+
+    #[test]
+    fn source_selections_event_fills_the_section() {
+        let backend = backend();
+        let mut state = UiState::new(backend);
+        assert!(state.apply_event(Event::SourceSelections {
+            source: "jamendo".into(),
+            request_id: 0,
+            items: vec![item("sel-1")],
+        }));
+        assert_eq!(state.jamendo_selections.len(), 1);
+        assert_eq!(
+            state.jamendo_selection_keys,
+            vec!["jamendo-selection-sel-1"]
+        );
+    }
+
+    #[test]
+    fn leaving_jamendo_cancels_the_pending_request() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.set_view(View::Jamendo);
+        state.set_view(View::Tracks);
+        assert_eq!(backend.cancel_requests.load(Ordering::Acquire), 1);
+        assert!(!state.jamendo_loading);
+    }
+
+    #[test]
+    fn an_empty_selection_response_can_retry_after_the_next_result() {
+        let backend = backend();
+        let mut state = UiState::new(backend.clone());
+        state.request_jamendo_selections();
+        assert_eq!(backend.selection_requests.load(Ordering::Acquire), 1);
+        state.apply_event(Event::SourceSelections {
+            source: "jamendo".into(),
+            request_id: 0,
+            items: Vec::new(),
+        });
+        assert!(!state.jamendo_selections_requested);
+        state.apply_event(Event::SourceResults {
+            source: "jamendo".into(),
+            request_id: 1,
+            items: vec![item("1")],
+            offline: false,
+            cached: false,
+            has_more: false,
+        });
+        assert_eq!(backend.selection_requests.load(Ordering::Acquire), 2);
+        assert_eq!(state.jamendo_selections_attempts, 2);
+    }
 }
