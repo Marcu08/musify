@@ -293,15 +293,20 @@ UI Playlist
 - Il trait `ui::Backend` espone i metodi playlist con default, così i backend di
   test restano compilabili; `AppBackend` li inoltra alla libreria.
 
-## Jamendo (M7.2)
+## Jamendo (M7.2/M7.4)
 
 ```text
 UI Jamendo
+  ├─ home: 12 generi, 4 ordinamenti, testo, selezioni
   ├─ source_search("jamendo") ──▶ JamendoSource::search
-  │     ├─ GET api.jamendo.com/v3.0/tracks (client_id, search/tags, audioformat=mp32)
-  │     ├─ rate limit 1/s + backoff su 429/5xx/errori di rete
-  │     ├─ cache SQLite 24 h come fallback
+  │     ├─ GET api.jamendo.com/v3.0/tracks
+  │     │    (client_id, tags, search, order/boost, limit/offset,
+  │     │     audioformat=mp32, include=licenses)
+  │     ├─ cache-first 24 h in SQLite, fallback stale se la rete fallisce
+  │     ├─ rate limit 1/s + backoff su 429/5xx + retry su 0 risultati
   │     └─ SourceItem (audio, license_ccurl, album_image, duration, shareurl)
+  ├─ source_selections("jamendo") ──▶ /playlists/hots + /playlists/tracks
+  ├─ source_play_list/enqueue/save ──▶ resolve DB-only + Command
   └─ source_play("jamendo") ──▶ resolve (solo DB)
         └─ Command::PlayTrack (Track.source = jamendo://audio-url, OnDemand)
               └─ HttpStream::OnDemand (Range/seek)
@@ -310,24 +315,47 @@ UI Jamendo
 - `musify-jamendo` implementa `SourceProvider` con schema `jamendo`. Il client id
   arriva solo da `MUSIFY_JAMENDO_CLIENT_ID`: se manca, l'app non registra la
   fonte, non apre `jamendo.sqlite3` e la vista Fonti mostra come configurarla.
-- Il provider non legge `audiodownload` né `audiodownload_allowed`: usa solo il
-  campo `audio` in streaming. Nessun byte audio viene scritto su disco; le
-  copertine stanno in `jamendo-covers` (64 file / 8 MB).
-- La ricerca è network-first con fallback a una cache SQLite di 24 h; preferiti
-  e metadati dei brani stanno in `jamendo.sqlite3`. `resolve` è solo DB, quindi
-  la riproduzione non blocca la UI su una richiesta di rete; la rete vive nel
-  thread di ricerca del registro fonti.
+- La home non ha campi obbligatori: parte dal genere `jazz` con "Popolari
+  settimana" e ogni pulsante genere/ordinamento produce subito una query. La
+  ricerca testuale si combina con genere e ordinamento; con testo libero il
+  client usa `boost` per la popolarità (per non perdere la rilevanza) e
+  `order=releasedate_desc` per "Novità".
+- `order` usati: `popularity_week`, `popularity_month`, `popularity_total`,
+  `releasedate_desc`. `limit` è 60 (max API 200) e `offset` implementa
+  "Carica altri"; la lista resta virtualizzata.
+- La ricerca è **cache-first** entro 24 h. Il pulsante Cerca aggiunge il filtro
+  locale `refresh=1` e salta la cache fresca. In caso di errore di rete il
+  client usa una cache più vecchia con `offline=true`.
+- Il precaricamento è una tantum: all'avvio, se la fonte è registrata, un
+  thread legge i generi più usati da `genre_usage` (fallback
+  jazz/electronic/rock/pop), scarica la prima pagina "Popolari settimana" e la
+  scrive nella stessa cache delle ricerche. Un'altra ricerca incrementa una
+  `generation` atomica e ferma il precaricamento. Non c'è polling.
+- `SourceRegistry` incrementa un `request_id` per fonte e scarta i risultati
+  superati; `source_cancel` incrementa il request id e chiama
+  `SourceProvider::cancel`, che in Jamendo incrementa la stessa `generation`.
+  Le attese del rate limiter e i backoff sono spezzati in passi da 25 ms e si
+  interrompono quando la generazione cambia.
+- Le "Selezioni" sono le playlist scelte da Jamendo: `/playlists/hots` restituisce
+  gli id, `/playlists/tracks` i brani (id separati da spazio). Sono salvate in
+  `selections` con TTL 24 h; aprendo una selezione si leggono solo dal DB.
+  L'endpoint `/radios/stream` è dichiarato non funzionante dalla documentazione
+  ufficiale e non è usato.
+- `jamendo.sqlite3` contiene `tracks`, `favorites`, `searches`, `genre_usage` e
+  `selections`. `genre_usage` è un contatore locale, non viene inviato a
+  Jamendo. `resolve` resta solo DB, quindi la riproduzione non blocca la UI su
+  una richiesta di rete.
 - Il client usa uno user-agent identificabile, limita le richieste a 1/s,
   ritenta 429/5xx/errori di rete con backoff esponenziale e redige il client id
-  dai messaggi di errore.
+  dai messaggi di errore. Non legge `audiodownload` né
+  `audiodownload_allowed`: usa solo il campo `audio` in streaming.
 - `Track::is_on_demand` include `jamendo`, quindi `HttpStream::OnDemand` gestisce
   gli stream finiti e il seek Range. `Track.album` contiene
   `album · licenza · Jamendo` per l'attribuzione in SMTC; la UI mostra licenza e
   link alla licenza CC e alla pagina del brano Jamendo.
 - I brani Jamendo entrano nelle playlist M7.1 tramite
-  `Backend::add_source_to_playlist`: il backend risolve l'elemento e salva il
-  consueto snapshot, con `source_scheme = "jamendo"` e l'URL audio come
-  `item_id`.
+  `Backend::add_source_to_playlist`, oppure con "Salva come playlist" che
+  risolve la lista visibile e crea una playlist con nome automatico.
 
 ## Libreria locale (M2)
 
@@ -359,7 +387,8 @@ cartelle musicali
 - `state.json`: coda, brano corrente, posizione, timestamp di salvataggio.
 - `library.sqlite3`: brani, album, artisti, playlist, elementi delle playlist,
   stato della scansione.
-- `jamendo.sqlite3`: cache ricerche, metadati dei brani e preferiti Jamendo.
+- `jamendo.sqlite3`: cache ricerche, metadati dei brani, preferiti, uso dei
+  generi e selezioni Jamendo.
 - `jamendo-covers/`: copertine Jamendo, massimo 64 file / 8 MB.
 - `covers/`: copertine ridimensionate, nominate per hash del contenuto.
 
@@ -394,6 +423,12 @@ cartelle musicali
   presente nell'ambiente. La rete avviene solo nella ricerca/artwork, mai in
   `resolve` o a riposo; il client id non viene mai serializzato, loggato o
   mostrato. Solo streaming: i campi di download dell'API non sono modellati.
+- **M7.4**: la home Jamendo è guidata da generi e ordinamenti, non da un campo
+  tag. La cache è cache-first entro 24 h perché il precaricamento deve rendere
+  immediato il primo clic; "Cerca" forza un aggiornamento. Il precaricamento è
+  una tantum e cancellabile; nessun polling. Le selezioni curate vengono
+  esposte solo se l'endpoint restituisce almeno un brano; la radio Jamendo è
+  omessa perché la documentazione ufficiale dichiara lo stream non funzionante.
 
 ## Diagrammi di dettaglio
 

@@ -57,12 +57,19 @@ un commit preciso e confinata al crate `musify-ui`.
   di titolo/artista/album/durata/copertina, riordino con pulsanti e Alt+↑/↓,
   import/export M3U8 UTF-8. I file mancanti restano visibili in grigio e vengono
   saltati in riproduzione. Radio e podcast restano fuori dalle playlist.
-- **Jamendo (M7.2)**: fonte `jamendo://` tramite `SourceProvider`, ricerca per
-  brano/artista/tag, streaming MP3 OnDemand con seek quando il server lo
+- **Jamendo (M7.2/M7.4)**: fonte `jamendo://` tramite `SourceProvider`, ricerca
+  per brano/artista/tag, streaming MP3 OnDemand con seek quando il server lo
   consente, cache risultati 24 h, preferiti SQLite, copertine limitate e
   attribuzione Creative Commons con link a Jamendo. Richiede
   `MUSIFY_JAMENDO_CLIENT_ID`; senza chiave la fonte non compare e la UI spiega
   come configurarla. Solo streaming: nessun download.
+- **Jamendo veloce (M7.4)**: home a 12 generi con etichette italiane,
+  ordinamento Popolari settimana/mese/sempre e Novità, ricerca per testo
+  combinata con genere e ordinamento, paginazione a 60 brani con lista
+  virtualizzata, azioni rapide (riproduci tutto, mescola, aggiungi alla coda,
+  salva come playlist), selezioni curate Jamendo, cache-first 24 h con
+  precaricamento una tantum dei generi più usati, richieste annullabili e
+  latenza visibile. Un clic su un genere basta per ascoltare.
 - **HTTP Range**: gli episodi MP3/AAC con `Accept-Ranges` sono seekable tramite
   richieste `Range`; la riconnessione riparte dall’offset in byte. Se il server
   non supporta Range, l’episodio resta riproducibile ma la UI indica che non è
@@ -106,6 +113,10 @@ un commit preciso e confinata al crate `musify-ui`.
 | Jamendo | Fonti |
 | --- | --- |
 | ![Jamendo](docs/evidence/m72-jamendo.png) | ![Fonti](docs/evidence/m72-sources-jamendo.png) |
+
+| Jamendo veloce (M7.4) |
+| --- |
+| ![Jamendo M7.4](docs/evidence/m74-jamendo.png) |
 
 ## Requisiti
 
@@ -165,6 +176,10 @@ per lo scan. Dettagli e regole di sicurezza in
 | `←` / `→` | Seek ±5 secondi |
 | `Ctrl+←` / `Ctrl+→` | Brano precedente / successivo |
 | `Alt+↑` / `Alt+↓` | Sposta il brano selezionato nella playlist |
+| `Alt+←` / `Alt+→` | Jamendo: genere precedente / successivo |
+| `Enter` | Jamendo: riproduci il brano selezionato |
+| `Ctrl+Enter` | Jamendo: riproduci tutto |
+| `Alt+Enter` | Jamendo: mescola e riproduci |
 | `Ctrl+F` | Cerca |
 | `Ctrl+R` | Riscansiona la libreria |
 | `+` / `-` | Volume su / giù |
@@ -237,6 +252,12 @@ provider) e lo startup misurato è 1,62 s (1,91 s senza chiave nella stessa
 serie). La fonte non crea runtime di rete all'avvio. Dettagli e valori grezzi in
 [M7.2](docs/M72-JAMENDO-REPORT.md).
 
+Per M7.4, su un server finto con 40 ms di ritardo simulato, la stessa ricerca
+da 100 risultati passa da 62,4 ms (cache calda M7.2, network-first) a 4–6 ms
+(cache-first M7.4); il primo clic su un genere precaricato è 3,5–3,8 ms. La
+cache fredda resta dominata dalla rete (64–65 ms). Metodo e limiti in
+[M7.4](docs/M74-JAMENDO-UX-REPORT.md).
+
 ## Milestone
 
 | Milestone | Stato | Report |
@@ -253,6 +274,7 @@ serie). La fonte non crea runtime di rete all'avvio. Dettagli e valori grezzi in
 | M6.1 — Podcast e HTTP Range | completata | [M6.1](docs/M61-PODCAST-REPORT.md) |
 | M7.1 — Playlist | completata | [M7.1](docs/M71-PLAYLIST-REPORT.md) |
 | M7.2 — Jamendo | completata | [M7.2](docs/M72-JAMENDO-REPORT.md) |
+| M7.4 — Jamendo veloce da usare | completata | [M7.4](docs/M74-JAMENDO-UX-REPORT.md) |
 
 ## Sviluppo
 
@@ -293,7 +315,7 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 | `%APPDATA%\Musify\radio-icons\` | favicon radio, massimo 256 file / 16 MB |
 | `%APPDATA%\Musify\podcasts.sqlite3` | iscrizioni, episodi, ascoltato e ripresa |
 | `%APPDATA%\Musify\podcast-covers\` | copertine podcast, massimo 64 file / 8 MB |
-| `%APPDATA%\Musify\jamendo.sqlite3` | cache ricerche e preferiti Jamendo |
+| `%APPDATA%\Musify\jamendo.sqlite3` | cache ricerche, preferiti, uso dei generi e selezioni Jamendo |
 | `%APPDATA%\Musify\jamendo-covers\` | copertine Jamendo, massimo 64 file / 8 MB |
 
 ## Limiti noti
@@ -343,6 +365,20 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
   dell'API (1 richiesta/s nel client, backoff su 429/5xx, cache 24 h). Non
   vengono mai usati `audiodownload`/`audiodownload_allowed`: solo l'URL `audio`
   in streaming, senza copiare i file su disco.
+- La home Jamendo usa 12 generi; i tag sono quelli accettati dall'API, le
+  etichette sono in `i18n.rs`. Gli ordinamenti sono `popularity_week`,
+  `popularity_month`, `popularity_total` e `releasedate_desc`. `limit` è
+  paginato a 60 e l'API accetta al massimo 200 risultati per richiesta.
+- Le ricerche Jamendo sono cache-first entro 24 h; il pulsante Cerca forza una
+  richiesta fresca. Il precaricamento dei generi più usati parte una volta sola
+  all'avvio, solo se la chiave è presente, e si ferma se l'utente cerca altro.
+- L'API Jamendo a volte risponde `success` con 0 risultati a una query valida
+  (osservato su popolarità e novità). Il client ritenta una volta e, se esiste,
+  usa la cache precedente; senza cache la lista può risultare vuota.
+- Le "Selezioni" usano `/playlists/hots` e `/playlists/tracks`: sono playlist
+  scelte da Jamendo ma possono essere sporadiche o vuote; la sezione mostra solo
+  quelle con almeno un brano. L'endpoint radio (`/radios/stream`) è dichiarato
+  non funzionante dalla documentazione ufficiale e non viene usato.
 - Le copertine Jamendo sono in cache limitata (64 file / 8 MB); i risultati
   della ricerca hanno TTL 24 h. Senza rete e senza cache valida la ricerca
   mostra l'errore.

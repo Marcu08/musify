@@ -1,8 +1,8 @@
 # Checklist manuale — Musify
 
-Data: 2026-11-11
-Ambito: M7.2 (Jamendo), M7.1 (playlist), M6.1 (HTTP Range e podcast),
-M5.2 (registro fonti), M5.1/M5 (radio) e M4 (Windows).
+Data: 2026-11-14
+Ambito: M7.4 (UX Jamendo), M7.2 (Jamendo), M7.1 (playlist), M6.1 (HTTP Range
+e podcast), M5.2 (registro fonti), M5.1/M5 (radio) e M4 (Windows).
 Queste verifiche richiedono una finestra reale, il mixer di Windows o la sessione
 utente: non sono automatizzabili in modo affidabile. Eseguirle su una build
 release (`cargo build -p musify --release`) e annotare data, DPI e dispositivo
@@ -169,7 +169,7 @@ se il bug si ripresenta, annotare DPI, monitor e risoluzione.
 Verificare che una migrazione da una build precedente mantenga le playlist
 esistenti e che `PRAGMA user_version` valga 2.
 
-## 10. Jamendo (M7.2)
+## 10. Jamendo (M7.2 / M7.4)
 
 Configurare il client id solo nella sessione corrente (non scriverlo nel
 repository, nei log o negli screenshot):
@@ -181,20 +181,33 @@ $env:MUSIFY_JAMENDO_CLIENT_ID = "<client id>"
 | Passo | Risultato atteso |
 | --- | --- |
 | Avviare Musify con la variabile impostata | In Fonti compare la scheda Jamendo; il log dice solo `Jamendo source enabled`, mai la chiave. |
-| Aprire Fonti → Jamendo | La vista mostra i campi Brano o artista, Tag/genere, Cerca e Preferiti. |
-| Cercare un brano o un artista | Arrivano risultati con titolo, artista, album, durata, copertina, etichetta CC e link Jamendo. |
+| Aprire Fonti → Jamendo | La home mostra 12 pulsanti genere (Jazz selezionato), 4 ordinamenti, il campo di ricerca e le Selezioni. Non ci sono campi tag obbligatori. |
+| Cliccare un genere diverso | I risultati cambiano subito; il genere è evidenziato; il conteggio e la latenza (`Risultati in … ms` o `Da cache · … ms`) sono visibili. |
+| Cliccare lo stesso genere una seconda volta | La lista arriva dalla cache e la latenza è chiaramente più bassa; il badge dice `Da cache`. |
+| Premere Cerca con lo stesso genere | Parte una richiesta fresca (`refresh=1`) e la latenza torna quella di rete. |
+| Cambiare ordinamento (mese, sempre, Novità) | La lista si aggiorna con l'ordine scelto; "Novità" usa `releasedate_desc`. |
+| Scrivere un testo e cercare con un genere selezionato | I risultati combinano testo + genere + ordinamento; con la popolarità il client usa `boost`, non `order`. |
+| Cliccare Rapidi: Riproduci tutto / Mescola / Aggiungi tutto alla coda | La coda viene sostituita o accodata; Mescola cambia solo l'ordine della lista, non il toggle globale. |
+| Cliccare Salva come playlist | Viene creata una playlist locale con nome automatico `Jamendo · <genere> · <ordinamento>`; i brani hanno snapshot e licenza. |
+| Doppio clic su una riga o Enter dopo averla selezionata | Il singolo brano parte; l'attribuzione CC e il link Jamendo restano visibili. |
+| Premere Carica altri | Arrivano altri 60 brani, la lista resta virtualizzata e lo scroll non salta all'inizio. |
+| Cliccare una selezione Jamendo | La lista mostra i brani della playlist curata; `Torna ai generi` riporta alla griglia. Se non ci sono selezioni, la sezione è assente. |
+| Premere Alt+←/→, Ctrl+Enter, Alt+Enter | Alt+←/→ cambia genere; Ctrl+Enter riproduce tutto; Alt+Enter mescola. |
+| Cliccare un genere e subito un altro | La prima richiesta viene annullata; non compare un errore e vince il secondo genere. |
 | Cliccare l'etichetta CC e il link Jamendo | Il browser apre rispettivamente la licenza Creative Commons e la pagina del brano su Jamendo. |
-| Premere Ascolta | L'audio parte; la barra mostra durata e stato; l'overlay SMTC mostra titolo, artista, album con licenza/Jamendo e copertina. |
 | Trascinare la barra di seek | Se il server supporta Range, la riproduzione riparte dalla posizione scelta; altrimenti compare `Stream non seekable`. |
-| Salvare un preferito e riavviare | Il preferito resta; la ricerca con rete assente entro 24 h mostra i risultati in cache con l'avviso offline. |
-| Aggiungere un risultato alla playlist M7.1 con `+` | Il brano compare nella playlist selezionata con lo snapshot; riproducendolo funziona lo streaming OnDemand. |
-| Controllare `%APPDATA%\Musify\` | Esistono solo `jamendo.sqlite3` e `jamendo-covers/` (max 64 file / 8 MB); nessun file audio scaricato. |
-| Rimuovere la variabile e riavviare | La scheda Jamendo non compare; Fonti mostra `Jamendo non configurato` con la variabile da impostare. |
-| Controllare i log | Nessuna occorrenza del client id, nessun URL con `client_id`, nessun runtime di rete a riposo. |
+| Salvare un preferito e riavviare | Il preferito resta; entro 24 h la ricerca usa la cache e mostra l'avviso solo quando la rete fallisce. |
+| Controllare `%APPDATA%\Musify\` | Esistono solo `jamendo.sqlite3` (tracks, favorites, searches, genre_usage, selections) e `jamendo-covers/` (max 64 file / 8 MB); nessun file audio scaricato. |
+| Riavviare e aprire Jamendo dopo qualche secondo | Il precaricamento una tantum ha già la prima pagina dei generi più usati; il primo clic è `Da cache`. Se si cerca subito, il precaricamento si ferma. |
+| A riposo, senza aprire Jamendo, per 30 s | CPU ~0%; nessun polling e nessun runtime di rete attivo dopo il precaricamento una tantum. |
+| Rimuovere la variabile e riavviare | La scheda Jamendo non compare; Fonti mostra `Jamendo non configurato` con la variabile da impostare; nessun accesso a `jamendo.sqlite3`. |
+| Controllare i log | Nessuna occorrenza del client id, nessun URL con `client_id`; nessun download o file audio. |
 
-La prova manuale completa (ricerca, ascolto, seek, playlist) richiede una
-sessione audio reale e la chiave dell'utente; i test automatici usano solo un
-server finto e non toccano la rete.
+La prova manuale completa (ascolto, seek, SMTC, salvataggio playlist) richiede
+una sessione audio reale e la chiave dell'utente; i test automatici usano solo
+un server finto e non toccano la rete. La radio Jamendo (`/radios/stream`) non
+è in checklist perché la documentazione ufficiale la dichiara non funzionante:
+la sezione non è stata implementata.
 
 ## 11. Riposo
 
