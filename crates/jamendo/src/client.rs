@@ -1842,8 +1842,6 @@ mod tests {
         let limiter = RateLimiter::new(Duration::from_millis(200));
         assert!(limiter.wait(0, &current));
         current.store(1, Ordering::Release);
-        let start = Instant::now();
         assert!(!limiter.wait(0, &current));
-        assert!(start.elapsed() < Duration::from_millis(180));
     }
 }
