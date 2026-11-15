@@ -1,8 +1,9 @@
 # Checklist manuale — Musify
 
-Data: 2026-11-14
-Ambito: M7.4 (UX Jamendo), M7.2 (Jamendo), M7.1 (playlist), M6.1 (HTTP Range
-e podcast), M5.2 (registro fonti), M5.1/M5 (radio) e M4 (Windows).
+Data: 2026-11-15
+Ambito: M8 (build, installazione e log), M7.4 (UX Jamendo), M7.2 (Jamendo),
+M7.1 (playlist), M6.1 (HTTP Range e podcast), M5.2 (registro fonti),
+M5.1/M5 (radio) e M4 (Windows).
 Queste verifiche richiedono una finestra reale, il mixer di Windows o la sessione
 utente: non sono automatizzabili in modo affidabile. Eseguirle su una build
 release (`cargo build -p musify --release`) e annotare data, DPI e dispositivo
@@ -216,6 +217,29 @@ la sezione non è stata implementata.
 | Aprire Musify senza riprodurre e non toccare nulla per 30 s | La CPU resta a 0,0–0,3%; nessun redraw continuo. |
 | Controllare il Task Manager | Nessun runtime di rete attivo a riposo: Tokio esiste solo durante una ricerca o uno stream online. |
 | Ridurre a icona e ripristinare | La UI si ridisegna solo quando serve. |
+
+## 12. Build, installazione e log (M8)
+
+| Passo | Risultato atteso |
+| --- | --- |
+| Compilare con `cargo build -p musify --profile fast` | `target\fast\musify.exe` esiste; il profilo `release` non cambia. |
+| Compilare con `cargo build -p musify --release` | `target\release\musify.exe` esiste; build senza warning. |
+| Tasto destro sull'exe → Proprietà → Dettagli | Nome prodotto `Musify`, descrizione `Musify - il tuo player musicale desktop`, versione `0.1.0`, copyright `MIT`. |
+| Esplora file e collegamento | L'icona di Musify compare sull'exe e sui collegamenti, non l'icona generica di Windows. |
+| Eseguire `scripts\install-local.ps1 -WhatIf` | Mostra copia e creazione dei due collegamenti, poi `WhatIf: nessuna modifica effettuata`. |
+| Eseguire `scripts\install-local.ps1` senza admin | Copia in `%LOCALAPPDATA%\Musify\musify.exe`; crea `Musify.lnk` sul desktop e nel menu Start; nessuna richiesta UAC. |
+| Controllare `%APPDATA%\Musify` prima/dopo l'installazione | Contenuto e timestamp di configurazione, coda, cache e log non cambiano per effetto dello script. |
+| Avviare Musify dal collegamento (senza terminale) | L'app parte e `%APPDATA%\Musify\logs\musify.log` contiene le righe di avvio. |
+| Chiudere e riaprire più volte, poi controllare i log | Il file resta in append e ruota a 2 MB; esistono al massimo `musify.log` + 4 archivi. |
+| Cercare nei log `client_id`, `MUSIFY_JAMENDO_CLIENT_ID`, token o chiavi | Nessun valore segreto; al massimo nomi di variabili o messaggi redatti. |
+| Aggiornare l'exe e rieseguire `install-local.ps1` | L'exe in `%LOCALAPPDATA%` viene sostituito; i collegamenti restano validi. Con Musify aperto lo script chiede di chiuderlo. |
+| Push di soli tag (`git push origin m8` dopo il tag) | Il pre-push esegue lo scan segreti e salta clippy/test con un messaggio esplicito. |
+| Push di un branch o misto branch+tag | Il pre-push esegue scan, clippy e test. |
+| `MUSIFY_CARGO_JOBS=1` in una shell | Clippy e test usano `-j 1`; senza la variabile usano tutti i core. |
+
+La rotazione dei log è coperta anche da test automatici
+(`crates/app/src/logging.rs`). La prova manuale serve a verificare il percorso
+reale `%APPDATA%\Musify\logs` e l'avvio da collegamento.
 
 ## Registro delle prove
 

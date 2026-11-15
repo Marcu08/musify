@@ -357,6 +357,37 @@ UI Jamendo
   `Backend::add_source_to_playlist`, oppure con "Salva come playlist" che
   risolve la lista visibile e crea una playlist con nome automatico.
 
+## Build, risorse e log (M8)
+
+```text
+cargo build --profile fast   → target/fast/musify.exe
+cargo build --release        → target/release/musify.exe
+crates/app/build.rs          → winresource: icona + versione nel PE (solo Windows)
+main.rs                      → tracing su stdout + logs/musify.log
+```
+
+- Il profilo `fast` eredita da `release` e sovrascrive `lto = "thin"` e
+  `codegen-units = 16`. Il profilo `release` resta `codegen-units = 1`,
+  `lto = "fat"`, `strip = true`.
+- `crates/app/build.rs` usa `winresource` come build-dependency solo per
+  `cfg(windows)`. Incorpora `assets/musify.ico` e le stringhe di versione
+  (`ProductName`, `FileDescription`, `FileVersion`, ...). Su altri host il
+  build script è un no-op.
+- `crates/app/src/logging.rs` implementa un `MakeWriter` che scrive su stdout e
+  su `logs/musify.log`. La rotazione è per dimensione: 2 MB per file, massimo 5
+  file (`musify.log`, `musify.1.log`, ...). Il file corrente viene riaperto in
+  append a ogni avvio.
+- Il filtro limita `reqwest`, `hyper`, `h2` e `rustls` a `warn` anche se
+  `RUST_LOG` è impostato: gli URL HTTP contengono il client id Jamendo come
+  query parameter e non devono finire nei log.
+- `scripts/install-local.ps1` copia l'exe in `%LOCALAPPDATA%\Musify` e crea i
+  collegamenti desktop e menu Start. Non tocca `%APPDATA%\Musify`, non richiede
+  privilegi elevati e supporta `-WhatIf`; lo stesso script aggiorna
+  sovrascrivendo l'exe.
+- `.githooks/pre-push` legge i riferimenti da stdin: un push di soli
+  `refs/tags/*` salta clippy e test, un push di branch o misto li esegue.
+  `MUSIFY_CARGO_JOBS` limita la concorrenza quando serve.
+
 ## Libreria locale (M2)
 
 ```text
@@ -390,6 +421,8 @@ cartelle musicali
 - `jamendo.sqlite3`: cache ricerche, metadati dei brani, preferiti, uso dei
   generi e selezioni Jamendo.
 - `jamendo-covers/`: copertine Jamendo, massimo 64 file / 8 MB.
+- `logs/`: log applicativi con rotazione per dimensione (2 MB per file, massimo
+  5 file).
 - `covers/`: copertine ridimensionate, nominate per hash del contenuto.
 
 ## Decisioni

@@ -41,12 +41,22 @@ Prima del push:
 
 ```powershell
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -j 1 -- -D warnings
-cargo test --workspace -j 1
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 cargo build -p musify --release
 powershell -NoProfile -File .\scripts\check-secrets.ps1
 git push origin main
 ```
+
+Su macchine con poca RAM si può limitare la concorrenza senza cambiare i
+comandi:
+
+```powershell
+$env:MUSIFY_CARGO_JOBS = "1"
+```
+
+Il valore è opzionale; se non è impostato, Cargo usa tutti i core. Vale per
+`.githooks/pre-push`; gli altri script non forzano `-j 1`.
 
 Dopo il push, se la milestone è completa:
 
@@ -66,8 +76,13 @@ git config core.hooksPath .githooks
 ```
 
 - `.githooks/pre-commit`: scan segreti sui file staged e `cargo fmt --check`.
-- `.githooks/pre-push`: scan segreti sull'intero albero, `cargo clippy -D warnings`
-  e `cargo test`.
+  Non cambia in M8.
+- `.githooks/pre-push`: scan segreti sull'intero albero, `cargo clippy
+  -D warnings` e `cargo test`. Se il push contiene solo riferimenti
+  `refs/tags/*`, salta clippy e test: il codice non cambia e il tag è già stato
+  verificato. Un push misto branch+tag esegue i controlli.
+- `MUSIFY_CARGO_JOBS=1` limita la concorrenza di clippy/test nel pre-push; senza
+  la variabile Cargo usa tutti i core.
 - Su Windows gli hook girano con Git Bash e richiamano PowerShell per lo scan.
 - Se PowerShell non è disponibile, il pre-commit fallisce invece di saltare il
   controllo.

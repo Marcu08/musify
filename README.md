@@ -81,6 +81,9 @@ un commit preciso e confinata al crate `musify-ui`.
   misure oneste in [M5.1](docs/M51-REPORT.md).
 - **Windows-native**: SMTC, overlay di Windows, tasti multimediali, dialog
   nativo per scegliere le cartelle.
+- **Qualità della vita (M8)**: profilo di build `fast` per l'uso quotidiano,
+  icona e informazioni di versione nell'exe, installazione locale con collegamenti
+  desktop/menu Start e log su file con rotazione (senza terminale).
 - **Persistenza**: coda, brano corrente e posizione in `state.json`; cartelle,
   volume, shuffle e repeat in `config.toml`. Gli stream radio non vengono
   salvati.
@@ -141,6 +144,35 @@ Al primo avvio apri **Impostazioni → Aggiungi cartella**, scegli la cartella
 della tua musica e lascia che la scansione parta. La libreria viene aggiornata
 automaticamente quando i file cambiano.
 
+### Profili di build
+
+| Profilo | Comando | Quando usarlo |
+| --- | --- | --- |
+| `dev` | `cargo run -p musify` | sviluppo e debug, nessuna ottimizzazione |
+| `fast` | `cargo build -p musify --profile fast` → `target\fast\musify.exe` | uso quotidiano: thin LTO e 16 codegen unit, compila molto più in fretta di `release`; l'exe è un po' più grande e leggermente meno veloce |
+| `release` | `cargo build -p musify --release` → `target\release\musify.exe` | distribuzione: fat LTO, 1 codegen unit, strip; il più piccolo e veloce, ma il più lento da compilare |
+
+`cargo run -p musify --profile fast` funziona per una prova rapida. I tempi
+misurati sono in [docs/M8-REPORT.md](docs/M8-REPORT.md).
+
+## Installazione locale
+
+```powershell
+cargo build -p musify --release
+powershell -ExecutionPolicy Bypass -File .\scripts\install-local.ps1
+```
+
+Lo script copia `musify.exe` in `%LOCALAPPDATA%\Musify`, crea il collegamento sul
+desktop e nel menu Start con l'icona dell'exe, e non richiede privilegi di
+amministratore. Non tocca `%APPDATA%\Musify`: configurazione, coda, cache e log
+restano dove sono.
+
+- Per aggiornare: ricompila e riesegui lo stesso script. Chiudi prima Musify, se
+  è aperto.
+- `-Profile fast` installa `target\fast\musify.exe`.
+- `-WhatIf` mostra le operazioni senza eseguirle; `-Source <percorso>` installa
+  un eseguibile specifico.
+
 Per lo sviluppo:
 
 ```powershell
@@ -164,8 +196,11 @@ git config core.hooksPath .githooks
 
 Il `pre-commit` esegue lo scan segreti (`scripts/check-secrets.ps1`) e
 `cargo fmt --all -- --check`; il `pre-push` esegue lo scan sull'intero albero,
-clippy e test. Su Windows gli hook girano con Git Bash e richiamano PowerShell
-per lo scan. Dettagli e regole di sicurezza in
+clippy e test. Se il push contiene **solo tag** (`refs/tags/*`), clippy e test
+vengono saltati: il codice non cambia. Su macchine con poca RAM si può impostare
+`$env:MUSIFY_CARGO_JOBS = "1"` per limitare la concorrenza; senza la variabile
+Cargo usa tutti i core. Su Windows gli hook girano con Git Bash e richiamano
+PowerShell per lo scan. Dettagli e regole di sicurezza in
 [docs/GIT-WORKFLOW.md](docs/GIT-WORKFLOW.md).
 
 ## Scorciatoie
@@ -258,6 +293,21 @@ da 100 risultati passa da 62,4 ms (cache calda M7.2, network-first) a 4–6 ms
 cache fredda resta dominata dalla rete (64–65 ms). Metodo e limiti in
 [M7.4](docs/M74-JAMENDO-UX-REPORT.md).
 
+Per M8, build pulita e incrementale misurate in target directory isolate:
+
+| Metrica | `fast` | `release` |
+| --- | ---: | ---: |
+| Build pulita | 10m22,5 | 22m00,5 |
+| Build incrementale | 3m14,6 | 9m35,1 |
+| Eseguibile | 37,24 MB | 33,34 MB |
+| Avvio ready | 1,73 s | 1,78 s |
+| CPU in riproduzione | 9,36% di un core | 9,04% di un core |
+
+Le differenze di avvio e CPU sono dentro la varianza delle 10 esecuzioni; il
+profilo `fast` è equivalente all'uso quotidiano, il `release` resta quello di
+distribuzione. Dettagli, hash di riproducibilità e valori grezzi in
+[M8](docs/M8-REPORT.md).
+
 ## Milestone
 
 | Milestone | Stato | Report |
@@ -275,6 +325,7 @@ cache fredda resta dominata dalla rete (64–65 ms). Metodo e limiti in
 | M7.1 — Playlist | completata | [M7.1](docs/M71-PLAYLIST-REPORT.md) |
 | M7.2 — Jamendo | completata | [M7.2](docs/M72-JAMENDO-REPORT.md) |
 | M7.4 — Jamendo veloce da usare | completata | [M7.4](docs/M74-JAMENDO-UX-REPORT.md) |
+| M8 — Qualità della vita | completata | [M8](docs/M8-REPORT.md) |
 
 ## Sviluppo
 
@@ -317,6 +368,7 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
 | `%APPDATA%\Musify\podcast-covers\` | copertine podcast, massimo 64 file / 8 MB |
 | `%APPDATA%\Musify\jamendo.sqlite3` | cache ricerche, preferiti, uso dei generi e selezioni Jamendo |
 | `%APPDATA%\Musify\jamendo-covers\` | copertine Jamendo, massimo 64 file / 8 MB |
+| `%APPDATA%\Musify\logs\musify.log` | log applicativi; file corrente più archivio, 2 MB per file e massimo 5 file |
 
 ## Limiti noti
 
@@ -365,6 +417,16 @@ Variabili utili per test isolati: `MUSIFY_DATA_DIR`, `MUSIFY_MUSIC_DIRS`
   dell'API (1 richiesta/s nel client, backoff su 429/5xx, cache 24 h). Non
   vengono mai usati `audiodownload`/`audiodownload_allowed`: solo l'URL `audio`
   in streaming, senza copiare i file su disco.
+- Il profilo `fast` è pensato per l'uso quotidiano, non per la distribuzione:
+  thin LTO e 16 codegen unit compilano più in fretta, ma l'exe è più grande e
+  leggermente meno veloce del `release`. Il profilo `release` resta invariato.
+- L'installazione locale copia solo l'exe in `%LOCALAPPDATA%\Musify` e crea due
+  collegamenti; non crea servizi, non richiede admin e non modifica
+  `%APPDATA%\Musify`. Se Musify è aperto, l'aggiornamento dell'exe può fallire:
+  chiudere l'app e rieseguire lo script.
+- I log su file ruotano a 2 MB per file, con massimo 5 file. I target HTTP
+  rumorosi sono limitati a `warn` anche con `RUST_LOG`, per non far finire URL
+  con il client id nei log.
 - La home Jamendo usa 12 generi; i tag sono quelli accettati dall'API, le
   etichette sono in `i18n.rs`. Gli ordinamenti sono `popularity_week`,
   `popularity_month`, `popularity_total` e `releasedate_desc`. `limit` è
