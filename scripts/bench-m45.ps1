@@ -1,6 +1,8 @@
 param(
     [string]$Output = "docs/M45-BASELINE.md",
     [string]$Label = "M4.5 — Baseline prestazioni",
+    [ValidateSet("release", "fast")]
+    [string]$Profile = "release",
     [string]$RadioUrl = "",
     [string]$PodcastUrl = "",
     [int]$Runs = 10,
@@ -13,7 +15,9 @@ $root = Split-Path $PSScriptRoot -Parent
 $dataDir = Join-Path $root "testdata\m45"
 $musicDir = Join-Path $dataDir "music"
 $readyDir = Join-Path $dataDir "ready"
-$exe = Join-Path $root "target\release\musify.exe"
+$exe = Join-Path $root "target\$Profile\musify.exe"
+# The fixture library is built once in release; the scan profile does not
+# affect the app measurements and avoids a second large build.
 $libraryCli = Join-Path $root "target\release\library-cli.exe"
 $outPath = Join-Path $root $Output
 $csvPath = [System.IO.Path]::ChangeExtension($outPath, ".csv")
@@ -197,7 +201,7 @@ New-Item -ItemType Directory -Force -Path $dataDir, $musicDir, $readyDir | Out-N
 if (-not $SkipBuild) {
     Push-Location $root
     try {
-        cargo build -p musify --release
+        cargo build -p musify --profile $Profile
         cargo build -p musify-library --release --bin library-cli
     } finally {
         Pop-Location
@@ -228,6 +232,9 @@ $env:MUSIFY_MUSIC_DIRS = (Resolve-Path $musicDir).Path
 $env:RUNE_READY_DIR = (Resolve-Path $readyDir).Path
 Remove-Item Env:MUSIFY_NO_AUDIO -ErrorAction SilentlyContinue
 Remove-Item Env:MUSIFY_AUTOPLAY -ErrorAction SilentlyContinue
+# Keep the benchmark local: no Jamendo prefetch/network during startup or CPU
+# sampling, and no client id in the log files.
+Remove-Item Env:MUSIFY_JAMENDO_CLIENT_ID -ErrorAction SilentlyContinue
 if ($NoSmtc) {
     $env:MUSIFY_NO_SMTC = "1"
 } else {
@@ -281,7 +288,7 @@ Commit: ``$commit``
 Macchina: $cpuName · $logicalProcessors thread · $([math]::Round($os.TotalVisibleMemorySize / 1MB, 1)) GB RAM
 OS: $($os.Caption) $($os.Version)
 Rust: ``$rustc``
-Build: release, ``$([System.IO.Path]::GetFileName($exe))``
+Build: $(if ($Profile -eq "release") { "release" } else { "fast" }), ``$([System.IO.Path]::GetFileName($exe))``
 SMTC: $(if ($NoSmtc) { "disattivato (MUSIFY_NO_SMTC=1)" } else { "attivo" })
 Radio: $(if ($RadioUrl) { $RadioUrl } else { "non attiva" })
 Podcast: $(if ($PodcastUrl) { $PodcastUrl } else { "non attivo" })

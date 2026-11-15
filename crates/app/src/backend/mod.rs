@@ -29,6 +29,12 @@ use sources::SourceRegistry;
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
+/// Resolves the application data directory before the backend (and its
+/// logging) exists. `MUSIFY_DATA_DIR` keeps tests and benchmarks isolated.
+pub(crate) fn data_dir() -> PathBuf {
+    persistence::app_data_dir()
+}
+
 pub struct AppBackend {
     data_dir: PathBuf,
     config_path: PathBuf,
@@ -109,7 +115,7 @@ impl AppBackend {
                 }
             }
         } else {
-            tracing::info!("Jamendo source disabled: MUSIFY_JAMENDO_CLIENT_ID is not set");
+            tracing::info!("Jamendo source disabled: client id not configured");
         }
 
         let audio = if std::env::var("MUSIFY_NO_AUDIO").as_deref() == Ok("1") {

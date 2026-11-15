@@ -1673,7 +1673,20 @@ mod tests {
         let query = selected_query("jazz", Some("popular_week"), 0, 60);
         std::thread::scope(|scope| {
             let handle = scope.spawn(|| source.search(&query));
-            std::thread::sleep(Duration::from_millis(80));
+            // Wait until the fake server has actually received the request,
+            // then cancel while the delayed response is still in flight.
+            let mut arrived = false;
+            for _ in 0..500 {
+                let requests = runtime
+                    .block_on(server.received_requests())
+                    .unwrap_or_default();
+                if !requests.is_empty() {
+                    arrived = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(arrived, "the fake server did not receive the request");
             source.cancel();
             let outcome = handle.join().expect("search thread");
             assert!(matches!(outcome, Err(JamendoError::Cancelled)));

@@ -3,6 +3,22 @@ set -e
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
+# Git sends one line per ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# A tag-only push does not change the source tree, so clippy and tests are
+# redundant; the secret scan below still runs.
+saw_ref=0
+tag_only=1
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_ref" ] && continue
+    saw_ref=1
+    case "$local_ref:$remote_ref" in
+        refs/tags/*:*) ;;
+        "(delete)":refs/tags/*) ;;
+        *) tag_only=0 ;;
+    esac
+done
+
 if command -v pwsh >/dev/null 2>&1; then
     pwsh -NoProfile -File scripts/check-secrets.ps1 -All
 elif command -v powershell.exe >/dev/null 2>&1; then
@@ -12,5 +28,16 @@ else
     exit 1
 fi
 
-cargo clippy --workspace --all-targets -j 1 -- -D warnings
-cargo test --workspace -j 1
+if [ "$saw_ref" -eq 1 ] && [ "$tag_only" -eq 1 ]; then
+    echo "pre-push: push di soli tag, salto clippy e test"
+    exit 0
+fi
+
+jobs=${MUSIFY_CARGO_JOBS:-}
+if [ -n "$jobs" ]; then
+    cargo clippy --workspace --all-targets -j "$jobs" -- -D warnings
+    cargo test --workspace -j "$jobs"
+else
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace
+fi

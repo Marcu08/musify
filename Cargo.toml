@@ -75,3 +75,10 @@ debug = false
 codegen-units = 1
 lto = "fat"
 strip = true
+
+# Daily-use profile: much faster to rebuild than release, still optimized.
+# Distribution builds keep using `--release` (fat LTO, one codegen unit).
+[profile.fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
